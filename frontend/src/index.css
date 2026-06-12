@@ -1,0 +1,104 @@
+:root {
+  /* Soft Productivity / Notion-inspired */
+  --color-primary: #5b5fc7;
+  --color-primary-hover: #4a4eb5;
+  --color-primary-light: #eeeff8;
+  --color-primary-muted: #c4c6ef;
+
+  --gradient-brand: linear-gradient(135deg, #5b5fc7 0%, #7c6bc4 100%);
+  --gradient-btn: linear-gradient(135deg, #5b5fc7 0%, #6b5bb5 100%);
+
+  --color-bg: #f7f7f5;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f1f1ef;
+
+  --color-border: #e9e9e7;
+  --color-border-light: #f1f1ef;
+
+  --color-text: #37352f;
+  --color-text-secondary: #787774;
+  --color-text-muted: #b4b4b0;
+
+  --color-danger: #eb5757;
+  --color-danger-light: #fde8e8;
+  --color-success: #0f7b6c;
+  --color-success-light: #e6f4f1;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-full: 9999px;
+
+  --shadow-sm: 0 1px 2px rgba(15, 15, 15, 0.04);
+  --shadow-md: 0 2px 8px rgba(15, 15, 15, 0.06);
+  --shadow-lg: 0 4px 16px rgba(15, 15, 15, 0.08);
+
+  --transition: 0.15s ease;
+
+  color-scheme: light;
+
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica,
+    'Apple Color Emoji', Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+button {
+  font-family: inherit;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --color-primary: #7b7ff0;
+  --color-primary-hover: #9498f5;
+  --color-primary-light: #2a2b45;
+  --color-primary-muted: #4a4d8a;
+
+  --gradient-brand: linear-gradient(135deg, #6b6fd8 0%, #8a7fd4 100%);
+  --gradient-btn: linear-gradient(135deg, #6b6fd8 0%, #7d6fc8 100%);
+
+  --color-bg: #191919;
+  --color-surface: #252525;
+  --color-surface-hover: #2f2f2f;
+
+  --color-border: #3a3a3a;
+  --color-border-light: #2f2f2f;
+
+  --color-text: #e8e8e6;
+  --color-text-secondary: #a8a8a4;
+  --color-text-muted: #6f6f6b;
+
+  --color-danger: #ff6b6b;
+  --color-danger-light: #3d2020;
+  --color-success: #2dd4bf;
+  --color-success-light: #1a3330;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.3);
+}

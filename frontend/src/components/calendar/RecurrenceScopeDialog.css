@@ -1,0 +1,54 @@
+.scope-overlay {
+  z-index: 1100;
+}
+
+.scope-dialog {
+  width: min(100%, 360px);
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  box-shadow: var(--shadow-lg);
+}
+
+.scope-dialog h3 {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+
+.scope-description {
+  margin: 0 0 16px;
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+}
+
+.scope-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scope-option {
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.scope-option:hover {
+  background: var(--color-surface-hover);
+  border-color: var(--color-primary-muted);
+}
+
+.scope-cancel {
+  margin-top: 12px;
+  width: 100%;
+  padding: 10px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}

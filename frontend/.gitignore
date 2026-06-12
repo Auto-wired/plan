@@ -1,0 +1,5 @@
+# See root .gitignore for shared rules.
+# Frontend-specific ignores below.
+
+# Vite
+dist-ssr

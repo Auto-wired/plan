@@ -1,0 +1,349 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+.loading-screen {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  color: var(--color-text-secondary);
+  background: var(--color-bg);
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.app-layout {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+}
+
+/* Header */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  padding: 0 20px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.app-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.app-logo {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.app-logo-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 25%;
+  background: var(--gradient-brand);
+  color: white;
+}
+
+.app-logo-mark svg {
+  display: block;
+}
+
+.app-header-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.app-title {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--color-text);
+  line-height: 1.2;
+}
+
+.app-tagline {
+  margin: 0;
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+}
+
+.app-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 4px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.user-badge:hover {
+  background: var(--color-surface-hover);
+  border-color: var(--color-primary-muted);
+}
+
+.user-avatar-image {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.user-avatar {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.app-user {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-signout {
+  padding: 6px 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  transition: background var(--transition);
+}
+
+.app-signout:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.app-signout:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Content area */
+.app-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px 20px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.app-main {
+  flex: 1;
+  display: flex;
+  gap: 16px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.calendar-section {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.calendar-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.ai-section {
+  width: 380px;
+  flex-shrink: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.error-boundary {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 2rem;
+  text-align: center;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.error-boundary h2 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.error-boundary p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.error-boundary button {
+  padding: 8px 16px;
+  background: var(--gradient-btn);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Mobile bottom nav */
+.mobile-tabs {
+  display: none;
+}
+
+@media (min-width: 769px) {
+  .calendar-section,
+  .ai-section {
+    display: flex !important;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 1024px) {
+  .ai-section {
+    width: 340px;
+  }
+}
+
+@media (max-width: 768px) {
+  .mobile-tabs {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 56px;
+    background: var(--color-surface);
+    border-top: 1px solid var(--color-border);
+    z-index: 100;
+  }
+
+  .mobile-tabs button {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    background: none;
+    border: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    padding: 0;
+    font-size: 0.625rem;
+    font-weight: 500;
+    transition: color var(--transition);
+  }
+
+  .mobile-tabs button.active {
+    color: var(--color-primary);
+  }
+
+  .app-content {
+    padding: 12px;
+    padding-bottom: 68px;
+    gap: 10px;
+  }
+
+  .app-main {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .calendar-section,
+  .ai-section {
+    flex: 1;
+    width: 100%;
+    display: none;
+  }
+
+  .calendar-section.active,
+  .ai-section.active {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .calendar-card {
+    border-radius: var(--radius-md);
+  }
+
+  .user-badge {
+    display: none;
+  }
+
+  .app-header {
+    padding: 0 14px;
+  }
+
+  .app-tagline {
+    display: none;
+  }
+}
