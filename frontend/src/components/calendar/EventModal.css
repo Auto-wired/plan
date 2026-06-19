@@ -151,7 +151,7 @@
 .recurrence-end {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .recurrence-end-title {
@@ -160,15 +160,23 @@
   color: var(--color-text-secondary);
 }
 
+.recurrence-end-options {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+}
+
 .recurrence-radio {
   display: flex;
   flex-direction: row !important;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   font-size: 0.875rem;
   font-weight: 400 !important;
   color: var(--color-text);
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .recurrence-radio input[type='radio'] {
@@ -179,8 +187,16 @@
   flex-shrink: 0;
 }
 
-.recurrence-inline-input {
-  padding: 6px 8px !important;
+.recurrence-end-detail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  color: var(--color-text);
+}
+
+.recurrence-detail-input {
+  padding: 8px 10px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-bg);
@@ -188,18 +204,14 @@
   font-size: 0.875rem;
 }
 
-.recurrence-inline-input[type='number'] {
-  width: 64px;
+.recurrence-detail-input[type='number'] {
+  width: 80px;
 }
 
 .recurrence-date-input {
   flex: 1;
   min-width: 0;
-}
-
-.recurrence-inline-input:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+  max-width: 200px;
 }
 
 .recurrence-summary {

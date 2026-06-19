@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { getCategoryColor } from '../../lib/categories'
-import { formatKstDateTime } from '../../lib/datetime'
+import { formatEventScheduleRange } from '../../lib/datetime'
 import { useAIChat } from '../../hooks/useAIChat'
 import type { CalendarEvent } from '../../types'
 import { AIAssistantIcon } from '../common/AIAssistantIcon'
@@ -9,10 +9,16 @@ import { VoiceButton } from './VoiceButton'
 import './AIAssistantPanel.css'
 
 interface AIAssistantPanelProps {
-  userInitial: string
+  onEventClick?: (event: CalendarEvent) => void
 }
 
-function EventResultList({ events }: { events: CalendarEvent[] }) {
+function EventResultList({
+  events,
+  onEventClick,
+}: {
+  events: CalendarEvent[]
+  onEventClick?: (event: CalendarEvent) => void
+}) {
   if (!events.length) return null
 
   return (
@@ -21,17 +27,20 @@ function EventResultList({ events }: { events: CalendarEvent[] }) {
       <ul>
         {events.map((event) => (
           <li key={event.id}>
-            <span
-              className="ai-event-dot"
-              style={{ background: getCategoryColor(event.category) }}
-            />
-            <div className="ai-event-info">
-              <strong>{event.title}</strong>
-              <span>
-                {formatKstDateTime(event.start_at, 'datetime')}
-                {event.end_at && ` ~ ${formatKstDateTime(event.end_at, 'time')}`}
-              </span>
-            </div>
+            <button
+              type="button"
+              className="ai-event-item"
+              onClick={() => onEventClick?.(event)}
+            >
+              <span
+                className="ai-event-dot"
+                style={{ background: getCategoryColor(event.category) }}
+              />
+              <div className="ai-event-info">
+                <strong>{event.title}</strong>
+                <span>{formatEventScheduleRange(event.start_at, event.end_at, event.all_day)}</span>
+              </div>
+            </button>
           </li>
         ))}
       </ul>
@@ -45,7 +54,7 @@ const SUGGESTIONS = [
   '오늘 저녁 약속 일정 삭제해줘',
 ]
 
-export function AIAssistantPanel({ userInitial }: AIAssistantPanelProps) {
+export function AIAssistantPanel({ onEventClick }: AIAssistantPanelProps) {
   const { messages, isLoading, lastEvents, sendMessage, clearChat } = useAIChat()
   const [input, setInput] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -87,6 +96,8 @@ export function AIAssistantPanel({ userInitial }: AIAssistantPanelProps) {
         )}
       </div>
 
+      <EventResultList events={lastEvents} onEventClick={onEventClick} />
+
       <div className="ai-messages">
         {messages.length === 0 && (
           <div className="ai-empty">
@@ -112,7 +123,7 @@ export function AIAssistantPanel({ userInitial }: AIAssistantPanelProps) {
         )}
 
         {messages.map((msg) => (
-          <ChatMessage key={msg.id} message={msg} userInitial={userInitial} />
+          <ChatMessage key={msg.id} message={msg} />
         ))}
 
         {isLoading && (
@@ -128,7 +139,6 @@ export function AIAssistantPanel({ userInitial }: AIAssistantPanelProps) {
           </div>
         )}
 
-        <EventResultList events={lastEvents} />
         <div ref={messagesEndRef} />
       </div>
 

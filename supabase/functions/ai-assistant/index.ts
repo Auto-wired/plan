@@ -1,6 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { createProvider } from './providers/index.ts'
 import type { Message } from './providers/types.ts'
+import { type QueryPeriod } from './dateRanges.ts'
 import { buildSystemPrompt, executeTool, TOOL_DEFINITIONS } from './tools.ts'
 
 const corsHeaders = {
@@ -18,6 +19,44 @@ interface RequestBody {
 interface AIAction {
   tool: string
   result: unknown
+}
+
+const MESSAGE_PERIOD_PATTERNS: Array<{ pattern: RegExp; period: QueryPeriod }> = [
+  { pattern: /이번\s*주|this\s*week/i, period: 'this_week' },
+  { pattern: /다음\s*주|next\s*week/i, period: 'next_week' },
+  { pattern: /지난\s*주|last\s*week/i, period: 'last_week' },
+  { pattern: /이번\s*달|this\s*month/i, period: 'this_month' },
+  { pattern: /다음\s*달|next\s*month/i, period: 'next_month' },
+  { pattern: /지난\s*달|last\s*month/i, period: 'last_month' },
+  { pattern: /올해|금년|this\s*year/i, period: 'this_year' },
+  { pattern: /\b오늘\b|\btoday\b/i, period: 'today' },
+  { pattern: /\b내일\b|\btomorrow\b/i, period: 'tomorrow' },
+  { pattern: /\b어제\b|\byesterday\b/i, period: 'yesterday' },
+]
+
+function inferQueryPeriodFromMessage(message: string): QueryPeriod | null {
+  for (const { pattern, period } of MESSAGE_PERIOD_PATTERNS) {
+    if (pattern.test(message)) return period
+  }
+  return null
+}
+
+function enrichQueryEventArgs(
+  toolName: string,
+  args: Record<string, unknown>,
+  userMessage: string,
+): Record<string, unknown> {
+  if (toolName !== 'query_events') return args
+
+  const inferred = inferQueryPeriodFromMessage(userMessage)
+  if (!inferred) return args
+
+  return {
+    ...args,
+    period: inferred,
+    start_date: undefined,
+    end_date: undefined,
+  }
 }
 
 Deno.serve(async (req) => {
@@ -96,12 +135,19 @@ Deno.serve(async (req) => {
 
       for (const toolCall of response.toolCalls) {
         try {
+          const toolArgs = enrichQueryEventArgs(
+            toolCall.name,
+            toolCall.arguments,
+            message,
+          )
+
           const { result, events } = await executeTool(
             supabase,
             user.id,
             toolCall.name,
-            toolCall.arguments,
+            toolArgs,
             timezone ?? 'Asia/Seoul',
+            currentDate ?? new Date().toISOString(),
           )
           actions.push({ tool: toolCall.name, result })
           if (events.length) {

@@ -1,5 +1,4 @@
 import type { EventInput } from '@fullcalendar/core'
-import { getBrowserTimezone } from './datetime'
 import {
   normalizeDbTimestamp,
   recurrenceUntilLocalToUtc,
@@ -16,22 +15,19 @@ import type {
   RecurrenceRule,
 } from '../types'
 
-export function toFullCalendarEvent(
-  event: ExpandedCalendarEvent,
-  tz = getBrowserTimezone(),
-): EventInput {
+export function toFullCalendarEvent(event: ExpandedCalendarEvent): EventInput {
   const startDb = normalizeDbTimestamp(event.start_at)
   const endDb = normalizeDbTimestamp(event.end_at)
   const color = getCategoryColor(event.category)
-  const allDay = resolveEventAllDay(event.all_day, event.start_at, event.end_at, tz)
+  const allDay = resolveEventAllDay(event.all_day, event.start_at, event.end_at)
 
   return {
     id: event.instanceId,
     title: event.title,
-    start: utcToFullCalendarValue(event.start_at, allDay, tz),
+    start: utcToFullCalendarValue(event.start_at, allDay),
     end: allDay
-      ? toFullCalendarAllDayEnd(event.start_at, event.end_at, tz)
-      : utcToFullCalendarValue(event.end_at, allDay, tz),
+      ? toFullCalendarAllDayEnd(event.start_at, event.end_at)
+      : utcToFullCalendarValue(event.end_at, false),
     allDay,
     backgroundColor: color,
     borderColor: color,
@@ -48,11 +44,8 @@ export function toFullCalendarEvent(
   }
 }
 
-export function toFullCalendarEvents(
-  events: ExpandedCalendarEvent[],
-  tz = getBrowserTimezone(),
-): EventInput[] {
-  return events.map((event) => toFullCalendarEvent(event, tz))
+export function toFullCalendarEvents(events: ExpandedCalendarEvent[]): EventInput[] {
+  return events.map((event) => toFullCalendarEvent(event))
 }
 
 export function formDataToInsert(
@@ -77,23 +70,43 @@ export function formDataToInsert(
   }
 }
 
-export function eventToRecurrenceRule(
-  event: CalendarEvent,
-  tz = getBrowserTimezone(),
-): RecurrenceRule | null {
+export function eventToRecurrenceRule(event: CalendarEvent): RecurrenceRule | null {
   if (!event.recurrence_freq) return null
   return {
     freq: event.recurrence_freq,
     interval: event.recurrence_interval || 1,
     count: event.recurrence_count ?? undefined,
     until: event.recurrence_until
-      ? recurrenceUntilUtcToLocal(event.recurrence_until, tz)
+      ? recurrenceUntilUtcToLocal(event.recurrence_until)
       : undefined,
   }
 }
 
-export function eventToFormData(event: CalendarEvent, tz = getBrowserTimezone()): EventFormData {
-  const all_day = resolveEventAllDay(event.all_day, event.start_at, event.end_at, tz)
+function normalizeRecurrenceCount(count: number | null | undefined): number | null {
+  return count ?? null
+}
+
+function normalizeRecurrenceUntil(until: string | null | undefined): string | null {
+  return until?.slice(0, 10) ?? null
+}
+
+export function recurrenceRuleChanged(master: CalendarEvent, form: EventFormData): boolean {
+  const masterRule = eventToRecurrenceRule(master)
+  const formRule = form.recurrence ?? null
+
+  if (!masterRule && !formRule) return false
+  if (!masterRule || !formRule) return true
+
+  return (
+    masterRule.freq !== formRule.freq ||
+    (masterRule.interval || 1) !== (formRule.interval || 1) ||
+    normalizeRecurrenceCount(masterRule.count) !== normalizeRecurrenceCount(formRule.count) ||
+    normalizeRecurrenceUntil(masterRule.until) !== normalizeRecurrenceUntil(formRule.until)
+  )
+}
+
+export function eventToFormData(event: CalendarEvent): EventFormData {
+  const all_day = resolveEventAllDay(event.all_day, event.start_at, event.end_at)
   return {
     title: event.title,
     description: event.description ?? '',
@@ -101,6 +114,6 @@ export function eventToFormData(event: CalendarEvent, tz = getBrowserTimezone())
     end_at: normalizeDbTimestamp(event.end_at),
     all_day,
     category: event.category ?? DEFAULT_EVENT_CATEGORY,
-    recurrence: eventToRecurrenceRule(event, tz),
+    recurrence: eventToRecurrenceRule(event),
   }
 }

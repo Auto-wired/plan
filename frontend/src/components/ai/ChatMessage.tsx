@@ -1,14 +1,27 @@
-import { APP_TIMEZONE } from '../../lib/datetime'
+import { useProfileContext } from '../../contexts/ProfileContext'
 import type { ChatMessage as ChatMessageType } from '../../types'
 import { AIAssistantIcon } from '../common/AIAssistantIcon'
 import './ChatMessage.css'
 
 interface ChatMessageProps {
   message: ChatMessageType
-  userInitial: string
 }
 
-function UserAvatar({ initial }: { initial: string }) {
+function UserAvatar() {
+  const { profile } = useProfileContext()
+  const nickname = profile?.nickname ?? '사용자'
+  const initial = nickname.charAt(0).toUpperCase()
+
+  if (profile?.avatar_url) {
+    return (
+      <img
+        src={profile.avatar_url}
+        alt=""
+        className="chat-avatar chat-avatar--user chat-avatar-image"
+      />
+    )
+  }
+
   return (
     <span className="chat-avatar chat-avatar--user" aria-hidden="true">
       {initial}
@@ -24,7 +37,7 @@ function AIAvatar() {
   )
 }
 
-export function ChatMessage({ message, userInitial }: ChatMessageProps) {
+export function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.role === 'user'
 
   return (
@@ -34,13 +47,12 @@ export function ChatMessage({ message, userInitial }: ChatMessageProps) {
         <p>{message.content}</p>
         <time className="chat-message-time">
           {message.timestamp.toLocaleTimeString('ko-KR', {
-            timeZone: APP_TIMEZONE,
             hour: '2-digit',
             minute: '2-digit',
           })}
         </time>
       </div>
-      {isUser && <UserAvatar initial={userInitial} />}
+      {isUser && <UserAvatar />}
     </div>
   )
 }

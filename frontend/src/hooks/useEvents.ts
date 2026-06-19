@@ -1,11 +1,10 @@
 import { useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  localToUtc,
+  calendarDateToUtcIso,
   normalizeDbTimestamp,
   prepareEventFormForSave,
   recurrenceUntilLocalToUtc,
-  utcToLocalFormInput,
 } from '../lib/datetime'
 import { formDataToInsert, toFullCalendarEvents } from '../lib/eventMapper'
 import { expandEventsForRange } from '../lib/recurrence'
@@ -38,8 +37,8 @@ function normalizeEvent(event: CalendarEvent): CalendarEvent {
 }
 
 async function fetchEvents(range: DateRange): Promise<ExpandedCalendarEvent[]> {
-  const rangeStartIso = range.start.toISOString()
-  const rangeEndIso = range.end.toISOString()
+  const rangeStartIso = calendarDateToUtcIso(range.start)
+  const rangeEndIso = calendarDateToUtcIso(range.end)
 
   const { data: rawEvents, error } = await supabase
     .from('events')
@@ -100,8 +99,6 @@ export function useEvents(range: DateRange | null) {
 
   const updateEvent = useCallback(
     async (id: string, form: Partial<EventFormData>) => {
-      const allDay = form.all_day ?? false
-
       const payload: Record<string, unknown> = {}
       if (form.title !== undefined) payload.title = form.title
       if (form.description !== undefined) payload.description = form.description || null
@@ -109,16 +106,10 @@ export function useEvents(range: DateRange | null) {
       if (form.category !== undefined) payload.category = form.category
 
       if (form.start_at !== undefined) {
-        payload.start_at = localToUtc(
-          utcToLocalFormInput(normalizeDbTimestamp(form.start_at), allDay),
-          allDay,
-        )
+        payload.start_at = normalizeDbTimestamp(form.start_at)
       }
       if (form.end_at !== undefined) {
-        payload.end_at = localToUtc(
-          utcToLocalFormInput(normalizeDbTimestamp(form.end_at), allDay),
-          allDay,
-        )
+        payload.end_at = normalizeDbTimestamp(form.end_at)
       }
 
       if (form.recurrence !== undefined) {

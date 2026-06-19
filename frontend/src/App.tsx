@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthGuard } from './components/auth/AuthGuard'
 import { CategoryFilterBar } from './components/calendar/CategoryFilterBar'
-import { EventCalendar } from './components/calendar/EventCalendar'
-import type { EventCategory } from './lib/categories'
+import { EventCalendar, type EventCalendarHandle } from './components/calendar/EventCalendar'
+import { ALL_EVENT_CATEGORIES, type EventCategory } from './lib/categories'
 import { AIAssistantPanel } from './components/ai/AIAssistantPanel'
 import { AIAssistantIcon } from './components/common/AIAssistantIcon'
 import { AppLogo } from './components/common/AppLogo'
@@ -13,6 +13,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ProfileProvider, useProfileContext } from './contexts/ProfileContext'
 import { ToastProvider } from './contexts/ToastContext'
 import { useEventsRealtime } from './hooks/useEventsRealtime'
+import type { CalendarEvent } from './types'
 import './App.css'
 
 const queryClient = new QueryClient({
@@ -107,12 +108,19 @@ function AppHeader() {
 }
 
 function MainLayout() {
-  const { profile } = useProfileContext()
   const [activeTab, setActiveTab] = useState<'calendar' | 'ai'>('calendar')
-  const [selectedCategories, setSelectedCategories] = useState<EventCategory[]>([])
-  const userInitial = (profile?.nickname ?? '?').charAt(0).toUpperCase()
+  const [selectedCategories, setSelectedCategories] = useState<EventCategory[]>(ALL_EVENT_CATEGORIES)
+  const calendarRef = useRef<EventCalendarHandle>(null)
 
   useEventsRealtime()
+
+  const handleAIEventClick = (event: CalendarEvent) => {
+    calendarRef.current?.openEventForEdit(event)
+
+    if (window.matchMedia('(max-width: 768px)').matches) {
+      setActiveTab('calendar')
+    }
+  }
 
   return (
     <div className="app-layout">
@@ -127,11 +135,11 @@ function MainLayout() {
         <main className="app-main">
           <section className={`calendar-section ${activeTab === 'calendar' ? 'active' : ''}`}>
             <div className="calendar-card">
-              <EventCalendar selectedCategories={selectedCategories} />
+              <EventCalendar ref={calendarRef} selectedCategories={selectedCategories} />
             </div>
           </section>
           <aside className={`ai-section ${activeTab === 'ai' ? 'active' : ''}`}>
-            <AIAssistantPanel userInitial={userInitial} />
+            <AIAssistantPanel onEventClick={handleAIEventClick} />
           </aside>
         </main>
       </div>

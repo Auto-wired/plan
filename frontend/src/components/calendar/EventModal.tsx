@@ -3,10 +3,9 @@ import {
   calendarDateToUtcIso,
   defaultAllDayEventUtcIso,
   fcExclusiveEndToInclusiveAllDayDate,
-  getBrowserTimezone,
-  getTimezoneLabel,
   localToUtc,
   normalizeAllDayRangeForSave,
+  prepareEventFormForSave,
   utcToLocalFormInput,
 } from '../../lib/datetime'
 import {
@@ -84,20 +83,17 @@ function buildInitialForm(
   event: CalendarEvent | null,
   initialRange?: { start: Date; end: Date; allDay: boolean } | null,
 ): EventFormData {
-  const tz = getBrowserTimezone()
-  if (event) return eventToFormData(event, tz)
+  if (event) return eventToFormData(event)
   if (initialRange) {
     if (initialRange.allDay) {
       const start_at = localToUtc(
-        utcToLocalFormInput(calendarDateToUtcIso(initialRange.start, tz), true, tz),
+        utcToLocalFormInput(calendarDateToUtcIso(initialRange.start), true),
         true,
-        tz,
       )
       const inclusiveEnd = fcExclusiveEndToInclusiveAllDayDate(
-        calendarDateToUtcIso(initialRange.end, tz),
-        tz,
+        calendarDateToUtcIso(initialRange.end),
       )
-      const end_at = localToUtc(inclusiveEnd, true, tz)
+      const end_at = localToUtc(inclusiveEnd, true)
       return {
         ...emptyForm(),
         start_at,
@@ -107,8 +103,8 @@ function buildInitialForm(
     }
     return {
       ...emptyForm(),
-      start_at: calendarDateToUtcIso(initialRange.start, tz),
-      end_at: calendarDateToUtcIso(initialRange.end, tz),
+      start_at: calendarDateToUtcIso(initialRange.start),
+      end_at: calendarDateToUtcIso(initialRange.end),
       all_day: false,
     }
   }
@@ -116,21 +112,20 @@ function buildInitialForm(
 }
 
 function handleAllDayToggle(form: EventFormData, checked: boolean): EventFormData {
-  const tz = getBrowserTimezone()
   if (checked) {
-    const { start_at, end_at } = normalizeAllDayRangeForSave(form.start_at, form.end_at, tz)
+    const { start_at, end_at } = normalizeAllDayRangeForSave(form.start_at, form.end_at)
     return { ...form, all_day: true, start_at, end_at }
   }
 
-  const startDate = utcToLocalFormInput(form.start_at, true, tz)
-  const endDate = utcToLocalFormInput(form.end_at, true, tz)
+  const startDate = utcToLocalFormInput(form.start_at, true)
+  const endDate = utcToLocalFormInput(form.end_at, true)
   const effectiveEndDate = endDate >= startDate ? endDate : startDate
 
   return {
     ...form,
     all_day: false,
-    start_at: localToUtc(`${startDate}T09:00`, false, tz),
-    end_at: localToUtc(`${effectiveEndDate}T18:00`, false, tz),
+    start_at: localToUtc(`${startDate}T09:00`, false),
+    end_at: localToUtc(`${effectiveEndDate}T18:00`, false),
   }
 }
 
@@ -142,8 +137,6 @@ export function EventModal({
   onDelete,
   onClose,
 }: EventModalProps) {
-  const tz = getBrowserTimezone()
-  const tzLabel = getTimezoneLabel(tz)
   const [form, setForm] = useState(() => buildInitialForm(event, initialRange))
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -181,8 +174,7 @@ export function EventModal({
     } else if (mode === 'count') {
       updateRecurrence({ count: form.recurrence.count ?? 10, until: undefined })
     } else {
-      const tz = getBrowserTimezone()
-      const fallbackUntil = utcToLocalFormInput(form.start_at, true, tz)
+      const fallbackUntil = utcToLocalFormInput(form.start_at, true)
       updateRecurrence({ count: undefined, until: form.recurrence.until ?? fallbackUntil })
     }
   }
@@ -198,7 +190,7 @@ export function EventModal({
     setError(null)
 
     try {
-      await onSave(form, event?.id)
+      await onSave(prepareEventFormForSave(form), event?.id)
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : '저장에 실패했습니다.')
@@ -264,28 +256,28 @@ export function EventModal({
 
           <div className="datetime-row">
             <label>
-              {form.all_day ? `시작일 (${tzLabel})` : `시작 (${tzLabel})`}
+              {form.all_day ? '시작일' : '시작'}
               <input
                 type={form.all_day ? 'date' : 'datetime-local'}
-                value={utcToLocalFormInput(form.start_at, form.all_day, tz)}
+                value={utcToLocalFormInput(form.start_at, form.all_day)}
                 onChange={(e) =>
                   setForm({
                     ...form,
-                    start_at: localToUtc(e.target.value, form.all_day, tz),
+                    start_at: localToUtc(e.target.value, form.all_day),
                   })
                 }
                 required
               />
             </label>
             <label>
-              {form.all_day ? `종료일 (${tzLabel})` : `종료 (${tzLabel})`}
+              {form.all_day ? '종료일' : '종료'}
               <input
                 type={form.all_day ? 'date' : 'datetime-local'}
-                value={utcToLocalFormInput(form.end_at, form.all_day, tz)}
+                value={utcToLocalFormInput(form.end_at, form.all_day)}
                 onChange={(e) =>
                   setForm({
                     ...form,
-                    end_at: localToUtc(e.target.value, form.all_day, tz),
+                    end_at: localToUtc(e.target.value, form.all_day),
                   })
                 }
                 required
@@ -330,67 +322,73 @@ export function EventModal({
                   <div className="recurrence-end">
                     <span className="recurrence-end-title">반복 종료</span>
 
-                    <label className="recurrence-radio">
-                      <input
-                        type="radio"
-                        name="recurrence-end"
-                        checked={endMode === 'never'}
-                        onChange={() => handleEndModeChange('never')}
-                      />
-                      <span>계속 반복</span>
-                    </label>
+                    <div className="recurrence-end-options">
+                      <label className="recurrence-radio">
+                        <input
+                          type="radio"
+                          name="recurrence-end"
+                          checked={endMode === 'never'}
+                          onChange={() => handleEndModeChange('never')}
+                        />
+                        <span>계속 반복</span>
+                      </label>
 
-                    <label className="recurrence-radio">
-                      <input
-                        type="radio"
-                        name="recurrence-end"
-                        checked={endMode === 'count'}
-                        onChange={() => handleEndModeChange('count')}
-                      />
-                      <span>횟수</span>
-                      <input
-                        type="number"
-                        min={1}
-                        className="recurrence-inline-input"
-                        value={form.recurrence.count ?? ''}
-                        disabled={endMode !== 'count'}
-                        onChange={(e) =>
-                          updateRecurrence({
-                            count: Math.max(1, Number(e.target.value) || 1),
-                          })
-                        }
-                      />
-                      <span>회</span>
-                    </label>
+                      <label className="recurrence-radio">
+                        <input
+                          type="radio"
+                          name="recurrence-end"
+                          checked={endMode === 'count'}
+                          onChange={() => handleEndModeChange('count')}
+                        />
+                        <span>횟수</span>
+                      </label>
 
-                    <label className="recurrence-radio">
-                      <input
-                        type="radio"
-                        name="recurrence-end"
-                        checked={endMode === 'until'}
-                        onChange={() => handleEndModeChange('until')}
-                      />
-                      <span>종료 날짜</span>
-                      <input
-                        type="date"
-                        className="recurrence-inline-input recurrence-date-input"
-                        value={form.recurrence.until ?? ''}
-                        disabled={endMode !== 'until'}
-                        onChange={(e) =>
-                          updateRecurrence({ until: e.target.value || undefined })
-                        }
-                      />
-                    </label>
+                      <label className="recurrence-radio">
+                        <input
+                          type="radio"
+                          name="recurrence-end"
+                          checked={endMode === 'until'}
+                          onChange={() => handleEndModeChange('until')}
+                        />
+                        <span>종료 날짜</span>
+                      </label>
+                    </div>
+
+                    {endMode === 'count' && (
+                      <div className="recurrence-end-detail">
+                        <input
+                          type="number"
+                          min={1}
+                          className="recurrence-detail-input"
+                          value={form.recurrence.count ?? ''}
+                          onChange={(e) =>
+                            updateRecurrence({
+                              count: Math.max(1, Number(e.target.value) || 1),
+                            })
+                          }
+                        />
+                        <span>회 반복</span>
+                      </div>
+                    )}
+
+                    {endMode === 'until' && (
+                      <div className="recurrence-end-detail">
+                        <input
+                          type="date"
+                          className="recurrence-detail-input recurrence-date-input"
+                          value={form.recurrence.until ?? ''}
+                          onChange={(e) =>
+                            updateRecurrence({ until: e.target.value || undefined })
+                          }
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <p className="recurrence-summary">{describeRecurrence(form.recurrence)}</p>
                 </div>
               )}
             </fieldset>
-          )}
-
-          {isRecurringInstanceEdit && (
-            <p className="recurrence-note">반복 일정입니다. 저장 시 적용 범위를 선택합니다.</p>
           )}
 
           {isEditingRecurringMaster && (

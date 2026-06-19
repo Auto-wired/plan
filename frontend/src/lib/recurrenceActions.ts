@@ -1,4 +1,5 @@
-import { parseUtcIso, recurrenceUntilLocalToUtc } from './datetime'
+import { parseWallClockDate, recurrenceUntilLocalToUtc } from './datetime'
+import { recurrenceRuleChanged } from './eventMapper'
 import { supabase } from './supabase'
 import type {
   CalendarEvent,
@@ -27,6 +28,10 @@ function recurrencePayload(form: EventFormData) {
   }
 }
 
+function shiftTimestamp(iso: string, deltaMs: number): string {
+  return new Date(parseWallClockDate(iso).getTime() + deltaMs).toISOString()
+}
+
 async function excludeOccurrence(
   eventId: string,
   originalStartAt: string,
@@ -42,13 +47,51 @@ async function excludeOccurrence(
   if (error) throw error
 }
 
+async function wipeRecurrenceExceptions(eventId: string): Promise<void> {
+  const { error } = await supabase
+    .from('event_recurrence_exceptions')
+    .delete()
+    .eq('event_id', eventId)
+  if (error) throw error
+}
+
+async function migrateRecurrenceExceptions(
+  eventId: string,
+  deltaMs: number,
+): Promise<void> {
+  const exceptions = await fetchRecurrenceExceptions([eventId])
+
+  for (const ex of exceptions) {
+    const { error: deleteError } = await supabase
+      .from('event_recurrence_exceptions')
+      .delete()
+      .eq('id', ex.id)
+    if (deleteError) throw deleteError
+
+    const { error: insertError } = await supabase.from('event_recurrence_exceptions').insert({
+      event_id: ex.event_id,
+      original_start_at: shiftTimestamp(ex.original_start_at, deltaMs),
+      type: ex.type,
+      override_title: ex.override_title,
+      override_description: ex.override_description,
+      override_start_at: ex.override_start_at
+        ? shiftTimestamp(ex.override_start_at, deltaMs)
+        : null,
+      override_end_at: ex.override_end_at ? shiftTimestamp(ex.override_end_at, deltaMs) : null,
+      override_all_day: ex.override_all_day,
+      override_category: ex.override_category,
+    })
+    if (insertError) throw insertError
+  }
+}
+
 export async function deleteRecurringEvent(
   master: CalendarEvent,
   originalStartAt: string,
   scope: RecurrenceScope,
 ): Promise<void> {
   if (scope === 'all') {
-    await supabase.from('event_recurrence_exceptions').delete().eq('event_id', master.id)
+    await wipeRecurrenceExceptions(master.id)
     await supabase.from('events').delete().eq('id', master.id)
     return
   }
@@ -64,14 +107,18 @@ export async function editRecurringEvent(
   form: EventFormData,
 ): Promise<void> {
   if (scope === 'all') {
-    // 시리즈의 기준 시작점(마스터 start_at)은 유지하고, 편집한 인스턴스의
-    // 시간 이동분(delta)과 길이만 전체에 적용한다. (시간 변경이 없으면 기준점 그대로)
     const deltaMs =
-      parseUtcIso(form.start_at).getTime() - parseUtcIso(originalStartAt).getTime()
+      parseWallClockDate(form.start_at).getTime() - parseWallClockDate(originalStartAt).getTime()
     const durationMs =
-      parseUtcIso(form.end_at).getTime() - parseUtcIso(form.start_at).getTime()
-    const newStart = new Date(parseUtcIso(master.start_at).getTime() + deltaMs)
+      parseWallClockDate(form.end_at).getTime() - parseWallClockDate(form.start_at).getTime()
+    const newStart = new Date(parseWallClockDate(master.start_at).getTime() + deltaMs)
     const newEnd = new Date(newStart.getTime() + durationMs)
+
+    if (recurrenceRuleChanged(master, form)) {
+      await wipeRecurrenceExceptions(master.id)
+    } else if (deltaMs !== 0) {
+      await migrateRecurrenceExceptions(master.id, deltaMs)
+    }
 
     const { error } = await supabase
       .from('events')

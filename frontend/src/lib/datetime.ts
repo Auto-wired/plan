@@ -1,47 +1,73 @@
-import { formatInTimeZone, fromZonedTime, toZonedTime } from 'date-fns-tz'
-import { addDays, format } from 'date-fns'
 import type { EventFormData } from '../types'
+
+interface WallClockParts {
+  year: number
+  month: number
+  day: number
+  hour: number
+  minute: number
+  second: number
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+/** Supabase ISO에서 표시/저장용 시각 부분만 추출 (타임존 변환 없음) */
+export function extractWallClockParts(iso: string): WallClockParts {
+  const match = iso
+    .trim()
+    .match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/)
+
+  if (!match) {
+    throw new Error(`잘못된 날짜 형식: ${iso}`)
+  }
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+    hour: Number(match[4] ?? '0'),
+    minute: Number(match[5] ?? '0'),
+    second: Number(match[6] ?? '0'),
+  }
+}
+
+function formatWallClockIso(parts: WallClockParts): string {
+  return `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}T${pad2(parts.hour)}:${pad2(parts.minute)}:${pad2(parts.second)}.000Z`
+}
 
 export function getBrowserTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone
 }
 
-export function getTimezoneLabel(timezone = getBrowserTimezone()): string {
-  try {
-    const parts = new Intl.DateTimeFormat('ko-KR', {
-      timeZone: timezone,
-      timeZoneName: 'shortOffset',
-    }).formatToParts(new Date())
-    return parts.find((p) => p.type === 'timeZoneName')?.value ?? timezone
-  } catch {
-    return timezone
-  }
-}
-
-export function parseUtcIso(iso: string): Date {
-  const trimmed = iso.trim()
-  if (!trimmed) throw new Error(`잘못된 날짜 형식: ${iso}`)
-  return new Date(trimmed)
-}
-
 export function normalizeDbTimestamp(iso: string): string {
-  return parseUtcIso(iso).toISOString()
+  return formatWallClockIso(extractWallClockParts(iso))
 }
 
-/** UTC ISO → 폼/표시용 로컬 입력값 */
-export function utcToLocalFormInput(iso: string, allDay: boolean, tz = getBrowserTimezone()): string {
-  const date = parseUtcIso(iso)
-  if (allDay) {
-    return formatInTimeZone(date, tz, 'yyyy-MM-dd')
-  }
-  return formatInTimeZone(date, tz, "yyyy-MM-dd'T'HH:mm")
+/** 비교/반복 계산용 Date (Supabase 문자열의 UTC 필드를 그대로 사용) */
+export function parseWallClockDate(iso: string): Date {
+  return new Date(normalizeDbTimestamp(iso))
 }
 
-/** 폼 로컬 입력 → UTC ISO */
-export function localToUtc(value: string, allDay: boolean, tz = getBrowserTimezone()): string {
+/** @deprecated parseWallClockDate 사용 */
+export function parseUtcIso(iso: string): Date {
+  return parseWallClockDate(iso)
+}
+
+/** DB ISO → 폼/표시용 입력값 */
+export function utcToLocalFormInput(iso: string, allDay: boolean): string {
+  const parts = extractWallClockParts(iso)
+  const date = `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}`
+  if (allDay) return date
+  return `${date}T${pad2(parts.hour)}:${pad2(parts.minute)}`
+}
+
+/** 폼 입력 → DB ISO */
+export function localToUtc(value: string, allDay: boolean): string {
   if (allDay) {
     const dateOnly = value.slice(0, 10)
-    return fromZonedTime(`${dateOnly}T00:00:00`, tz).toISOString()
+    return `${dateOnly}T00:00:00.000Z`
   }
 
   const match = value.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})/)
@@ -49,101 +75,99 @@ export function localToUtc(value: string, allDay: boolean, tz = getBrowserTimezo
     throw new Error(`잘못된 날짜 형식: ${value}`)
   }
 
-  return fromZonedTime(`${match[1]}:00`, tz).toISOString()
+  return `${match[1]}:00.000Z`
 }
 
-/** UTC → FullCalendar 표시값 (timeZone prop과 함께 사용) */
-export function utcToFullCalendarValue(iso: string, allDay: boolean, tz = getBrowserTimezone()): string {
-  const date = parseUtcIso(iso)
+/** DB ISO → FullCalendar 입력값 */
+export function utcToFullCalendarValue(iso: string, allDay: boolean): string {
   if (allDay) {
-    return formatInTimeZone(date, tz, 'yyyy-MM-dd')
+    const parts = extractWallClockParts(iso)
+    return `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}`
   }
-  return formatInTimeZone(date, tz, "yyyy-MM-dd'T'HH:mm:ss")
+  return normalizeDbTimestamp(iso)
 }
 
-/** FullCalendar Date → UTC ISO */
-export function calendarDateToUtcIso(date: Date, tz = getBrowserTimezone()): string {
-  const wallClock = formatInTimeZone(date, tz, "yyyy-MM-dd'T'HH:mm:ss")
-  return fromZonedTime(wallClock, tz).toISOString()
+/** FullCalendar Date → DB ISO (UTC 필드 = Supabase 벽시계) */
+export function calendarDateToUtcIso(date: Date): string {
+  return formatWallClockIso({
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+    hour: date.getUTCHours(),
+    minute: date.getUTCMinutes(),
+    second: date.getUTCSeconds(),
+  })
 }
 
 export function nowUtcIso(): string {
-  return new Date().toISOString()
+  return calendarDateToUtcIso(new Date())
 }
 
-export function getTodayLocalDateString(tz = getBrowserTimezone()): string {
-  return formatInTimeZone(new Date(), tz, 'yyyy-MM-dd')
+export function getTodayLocalDateString(): string {
+  const now = new Date()
+  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`
 }
 
 export function addDaysToDateString(dateStr: string, days: number): string {
-  const base = parseUtcIso(`${dateStr}T00:00:00.000Z`)
-  return format(addDays(base, days), 'yyyy-MM-dd')
+  const { year, month, day } = extractWallClockParts(`${dateStr.slice(0, 10)}T00:00:00.000Z`)
+  const base = new Date(Date.UTC(year, month - 1, day + days))
+  return `${base.getUTCFullYear()}-${pad2(base.getUTCMonth() + 1)}-${pad2(base.getUTCDate())}`
 }
 
-export function defaultAllDayEventUtcIso(tz = getBrowserTimezone()): string {
-  return localToUtc(getTodayLocalDateString(tz), true, tz)
+export function defaultAllDayEventUtcIso(): string {
+  return localToUtc(getTodayLocalDateString(), true)
 }
 
-export function defaultTimedEventStartUtcIso(tz = getBrowserTimezone()): string {
-  return localToUtc(`${getTodayLocalDateString(tz)}T09:00`, false, tz)
+export function defaultTimedEventStartUtcIso(): string {
+  return localToUtc(`${getTodayLocalDateString()}T09:00`, false)
 }
 
-export function defaultTimedEventEndUtcIso(tz = getBrowserTimezone()): string {
-  return localToUtc(`${getTodayLocalDateString(tz)}T18:00`, false, tz)
+export function defaultTimedEventEndUtcIso(): string {
+  return localToUtc(`${getTodayLocalDateString()}T18:00`, false)
 }
 
-/** 종일 일정 폼 값을 inclusive 범위로 정규화 */
 export function normalizeAllDayRangeForSave(
   startAt: string,
   endAt: string,
-  tz = getBrowserTimezone(),
 ): { start_at: string; end_at: string } {
-  let start_at = localToUtc(utcToLocalFormInput(startAt, true, tz), true, tz)
-  let end_at = localToUtc(utcToLocalFormInput(endAt, true, tz), true, tz)
+  let start_at = localToUtc(utcToLocalFormInput(startAt, true), true)
+  let end_at = localToUtc(utcToLocalFormInput(endAt, true), true)
   if (end_at < start_at) {
     end_at = start_at
   }
   return { start_at, end_at }
 }
 
-/** FullCalendar exclusive end → 종일 일정 inclusive 마지막 날 */
-export function fcExclusiveEndToInclusiveAllDayDate(
-  exclusiveEndIso: string,
-  tz = getBrowserTimezone(),
-): string {
-  const exclusiveDate = utcToLocalFormInput(exclusiveEndIso, true, tz)
+export function fcExclusiveEndToInclusiveAllDayDate(exclusiveEndIso: string): string {
+  const exclusiveDate = utcToLocalFormInput(exclusiveEndIso, true)
   return addDaysToDateString(exclusiveDate, -1)
 }
 
-/** FullCalendar 드래그/리사이즈 결과 → UTC 저장값 */
 export function calendarRangeToUtcIso(
   start: Date,
   end: Date | null,
   allDay: boolean,
-  tz = getBrowserTimezone(),
 ): { start_at: string; end_at: string } {
-  const startRaw = calendarDateToUtcIso(start, tz)
+  const start_at = calendarDateToUtcIso(start)
 
   if (allDay) {
-    const start_at = localToUtc(utcToLocalFormInput(startRaw, true, tz), true, tz)
     if (!end) {
-      return { start_at, end_at: start_at }
+      return { start_at: localToUtc(utcToLocalFormInput(start_at, true), true), end_at: localToUtc(utcToLocalFormInput(start_at, true), true) }
     }
-    const inclusiveEnd = fcExclusiveEndToInclusiveAllDayDate(calendarDateToUtcIso(end, tz), tz)
-    const end_at = localToUtc(inclusiveEnd, true, tz)
-    return normalizeAllDayRangeForSave(start_at, end_at, tz)
+    const inclusiveEnd = fcExclusiveEndToInclusiveAllDayDate(calendarDateToUtcIso(end))
+    const end_at = localToUtc(inclusiveEnd, true)
+    return normalizeAllDayRangeForSave(start_at, end_at)
   }
 
-  const end_at = end ? calendarDateToUtcIso(end, tz) : startRaw
-  return { start_at: startRaw, end_at }
+  const end_at = end ? calendarDateToUtcIso(end) : start_at
+  return { start_at, end_at }
 }
 
-/** 종일 일정으로 저장 가능한 자정 타임스탬프인지 확인 (로컬 TZ 기준) */
-export function isAllDayTimestamps(startAt: string, endAt: string, tz = getBrowserTimezone()): boolean {
-  const start = toZonedTime(parseUtcIso(startAt), tz)
-  const end = toZonedTime(parseUtcIso(endAt), tz)
-  const isMidnight = (d: Date) =>
-    d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0
+export function isAllDayTimestamps(startAt: string, endAt: string): boolean {
+  const start = extractWallClockParts(startAt)
+  const end = extractWallClockParts(endAt)
+  const isMidnight = (parts: WallClockParts) =>
+    parts.hour === 0 && parts.minute === 0 && parts.second === 0
   return isMidnight(start) && isMidnight(end)
 }
 
@@ -151,70 +175,84 @@ export function resolveEventAllDay(
   allDay: boolean,
   startAt: string,
   endAt: string,
-  tz = getBrowserTimezone(),
 ): boolean {
-  return allDay && isAllDayTimestamps(startAt, endAt, tz)
+  return allDay && isAllDayTimestamps(startAt, endAt)
 }
 
-/** 종일 일정의 FC exclusive end (DB inclusive 마지막 날 + 1일) */
-export function toFullCalendarAllDayEnd(
-  startIso: string,
-  endIso: string,
-  tz = getBrowserTimezone(),
-): string {
-  const start = utcToLocalFormInput(startIso, true, tz)
-  const end = utcToLocalFormInput(endIso, true, tz)
+export function toFullCalendarAllDayEnd(startIso: string, endIso: string): string {
+  const start = utcToLocalFormInput(startIso, true)
+  const end = utcToLocalFormInput(endIso, true)
   const inclusiveEnd = end >= start ? end : start
   return addDaysToDateString(inclusiveEnd, 1)
 }
 
-/** 반복 종료일(로컬 날짜) → 해당 로컬 날짜의 끝(23:59:59)을 UTC ISO로 저장 */
-export function recurrenceUntilLocalToUtc(
-  localDate: string,
-  tz = getBrowserTimezone(),
-): string {
+export function recurrenceUntilLocalToUtc(localDate: string): string {
   const dateOnly = localDate.slice(0, 10)
-  return fromZonedTime(`${dateOnly}T23:59:59`, tz).toISOString()
+  return `${dateOnly}T23:59:59.000Z`
 }
 
-/** 저장된 반복 종료일(UTC) → 폼 표시용 로컬 날짜 */
-export function recurrenceUntilUtcToLocal(
-  iso: string,
-  tz = getBrowserTimezone(),
-): string {
-  return formatInTimeZone(parseUtcIso(iso), tz, 'yyyy-MM-dd')
+export function recurrenceUntilUtcToLocal(iso: string): string {
+  return utcToLocalFormInput(iso, true)
+}
+
+function formatWallClockParts(parts: WallClockParts, style: 'date' | 'time' | 'datetime'): string {
+  const dateLabel = `${parts.month}월 ${parts.day}일`
+  const timeLabel = `${pad2(parts.hour)}:${pad2(parts.minute)}`
+
+  if (style === 'date') return dateLabel
+  if (style === 'time') return timeLabel
+  return `${dateLabel} ${timeLabel}`
 }
 
 export function formatLocalDateTime(
   iso: string,
   style: 'date' | 'time' | 'datetime' = 'datetime',
-  tz = getBrowserTimezone(),
 ): string {
-  const date = parseUtcIso(iso)
-  if (style === 'date') {
-    return formatInTimeZone(date, tz, 'M월 d일')
-  }
-  if (style === 'time') {
-    return formatInTimeZone(date, tz, 'HH:mm')
-  }
-  return formatInTimeZone(date, tz, 'M월 d일 HH:mm')
+  return formatWallClockParts(extractWallClockParts(iso), style)
 }
 
-export function prepareEventFormForSave(form: EventFormData, tz = getBrowserTimezone()): EventFormData {
+export function formatEventScheduleRange(
+  startAt: string,
+  endAt: string,
+  allDay: boolean,
+): string {
+  if (allDay) {
+    const startDate = utcToLocalFormInput(startAt, true)
+    const endDate = utcToLocalFormInput(endAt, true)
+    const startLabel = formatLocalDateTime(startAt, 'date')
+
+    if (startDate === endDate) {
+      return startLabel
+    }
+
+    return `${startLabel} ~ ${formatLocalDateTime(endAt, 'date')}`
+  }
+
+  const startDate = utcToLocalFormInput(startAt, false).slice(0, 10)
+  const endDate = utcToLocalFormInput(endAt, false).slice(0, 10)
+
+  if (startDate === endDate) {
+    return `${formatLocalDateTime(startAt, 'datetime')} ~ ${formatLocalDateTime(endAt, 'time')}`
+  }
+
+  return `${formatLocalDateTime(startAt, 'datetime')} ~ ${formatLocalDateTime(endAt, 'datetime')}`
+}
+
+export function prepareEventFormForSave(form: EventFormData): EventFormData {
   if (form.all_day) {
-    const { start_at, end_at } = normalizeAllDayRangeForSave(form.start_at, form.end_at, tz)
+    const { start_at, end_at } = normalizeAllDayRangeForSave(form.start_at, form.end_at)
     return { ...form, start_at, end_at }
   }
 
   return {
     ...form,
-    start_at: localToUtc(utcToLocalFormInput(form.start_at, false, tz), false, tz),
-    end_at: localToUtc(utcToLocalFormInput(form.end_at, false, tz), false, tz),
+    start_at: localToUtc(utcToLocalFormInput(form.start_at, false), false),
+    end_at: localToUtc(utcToLocalFormInput(form.end_at, false), false),
   }
 }
 
 // 하위 호환 alias
-export const APP_TIMEZONE = getBrowserTimezone()
+export const APP_TIMEZONE = 'UTC'
 export const dbToKstFormInput = utcToLocalFormInput
 export const kstFormToDb = localToUtc
 export const dbToFullCalendarValue = utcToFullCalendarValue

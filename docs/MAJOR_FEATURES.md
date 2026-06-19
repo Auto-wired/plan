@@ -186,9 +186,10 @@ profiles (
 
 | 범위 | 동작 |
 |------|------|
-| **이 일정만** | `event_recurrence_exceptions`에 레코드 INSERT |
-| **이 일정 및 이후** | 마스터 `recurrence_until` 절단 + 새 마스터 생성 |
-| **전체 반복 일정** | 마스터 UPDATE/DELETE + 예외 전체 삭제 |
+| **이 일정만** | `event_recurrence_exceptions`에 `deleted` INSERT (수정 시 split) |
+| **전체 반복 일정** | 마스터 UPDATE/DELETE + 규칙 변경 시 예외 reset, 시간 이동 시 예외 migrate |
+
+> 상세 정책: [RECURRING_EVENT_POLICY.md](./RECURRING_EVENT_POLICY.md)
 
 드래그/리사이즈로 반복 인스턴스를 이동할 때도 동일한 범위 선택 Dialog가 표시됩니다.
 

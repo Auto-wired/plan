@@ -1,4 +1,4 @@
-import { EVENT_CATEGORIES, type EventCategory } from '../../lib/categories'
+import { EVENT_CATEGORIES, ALL_EVENT_CATEGORIES, isAllCategoriesSelected, type EventCategory } from '../../lib/categories'
 import './CategoryFilterBar.css'
 
 interface CategoryFilterBarProps {
@@ -10,18 +10,25 @@ export function CategoryFilterBar({
   selectedCategories,
   onChange,
 }: CategoryFilterBarProps) {
-  const isAllSelected = selectedCategories.length === 0
+  const isAllSelected = isAllCategoriesSelected(selectedCategories)
 
   const handleShowAll = () => {
-    onChange([])
+    onChange(ALL_EVENT_CATEGORIES)
   }
 
   const handleCategoryToggle = (category: EventCategory) => {
-    if (selectedCategories.includes(category)) {
-      onChange(selectedCategories.filter((c) => c !== category))
-    } else {
-      onChange([...selectedCategories, category])
+    if (isAllSelected) {
+      onChange(ALL_EVENT_CATEGORIES.filter((item) => item !== category))
+      return
     }
+
+    if (selectedCategories.includes(category)) {
+      const next = selectedCategories.filter((item) => item !== category)
+      onChange(next.length === 0 ? ALL_EVENT_CATEGORIES : next)
+      return
+    }
+
+    onChange([...selectedCategories, category])
   }
 
   return (
@@ -39,7 +46,7 @@ export function CategoryFilterBar({
         </button>
 
         {EVENT_CATEGORIES.map((cat) => {
-          const isActive = selectedCategories.includes(cat.value)
+          const isActive = isAllSelected || selectedCategories.includes(cat.value)
           return (
             <button
               key={cat.value}

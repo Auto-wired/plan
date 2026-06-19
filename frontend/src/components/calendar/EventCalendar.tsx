@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useImperativeHandle, useMemo, useState, forwardRef } from 'react'
 import { matchesCategoryFilter, type EventCategory } from '../../lib/categories'
 import FullCalendar from '@fullcalendar/react'
 import dayGridPlugin from '@fullcalendar/daygrid'
@@ -17,16 +17,19 @@ import { useEvents } from '../../hooks/useEvents'
 import {
   calendarDateToUtcIso,
   calendarRangeToUtcIso,
-  getBrowserTimezone,
 } from '../../lib/datetime'
 import type { CalendarEvent, DateRange, EventFormData, RecurrenceScope } from '../../types'
-import { eventToRecurrenceRule } from '../../lib/eventMapper'
+import { eventToRecurrenceRule, recurrenceRuleChanged } from '../../lib/eventMapper'
 import { EventModal } from './EventModal'
 import { RecurrenceScopeDialog, type RecurrenceScopeChoice } from './RecurrenceScopeDialog'
 import './EventCalendar.css'
 
 interface EventCalendarProps {
   selectedCategories?: EventCategory[]
+}
+
+export interface EventCalendarHandle {
+  openEventForEdit: (event: CalendarEvent) => void
 }
 
 interface PendingRecurringAction {
@@ -36,9 +39,9 @@ interface PendingRecurringAction {
   form?: EventFormData
 }
 
-export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
+export const EventCalendar = forwardRef<EventCalendarHandle, EventCalendarProps>(
+  function EventCalendar({ selectedCategories = [] }, ref) {
   const { user } = useAuth()
-  const tz = getBrowserTimezone()
   const [dateRange, setDateRange] = useState<DateRange | null>(null)
   const {
     calendarEvents,
@@ -88,6 +91,27 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
     setIsModalOpen(true)
   }, [])
 
+  const openCalendarEventForEdit = useCallback((event: CalendarEvent) => {
+    setSelectedEvent({
+      ...event,
+      recurrence_freq: event.recurrence_freq ?? null,
+      recurrence_interval: event.recurrence_interval ?? 1,
+      recurrence_count: event.recurrence_count ?? null,
+      recurrence_until: event.recurrence_until ?? null,
+    })
+    setSelectedOriginalStartAt(null)
+    setInitialRange(null)
+    setIsModalOpen(true)
+  }, [])
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      openEventForEdit: openCalendarEventForEdit,
+    }),
+    [openCalendarEventForEdit],
+  )
+
   const openEventForEdit = useCallback(
     async (clickInfo: EventClickArg) => {
       const event = clickInfo.event
@@ -95,7 +119,7 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
       const originalStartAt =
         (event.extendedProps.originalStartAt as string | undefined) ??
         (event.extendedProps.start_at as string | undefined) ??
-        (event.start ? calendarDateToUtcIso(event.start, tz) : '')
+        (event.start ? calendarDateToUtcIso(event.start) : '')
 
       const isRecurringInstance = Boolean(event.extendedProps.isRecurringInstance)
 
@@ -108,7 +132,7 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
           start_at: (event.extendedProps.start_at as string) ?? originalStartAt,
           end_at:
             (event.extendedProps.end_at as string) ??
-            (event.end ? calendarDateToUtcIso(event.end, tz) : originalStartAt),
+            (event.end ? calendarDateToUtcIso(event.end) : originalStartAt),
           all_day: event.allDay,
           category: (event.extendedProps.category as CalendarEvent['category']) ?? 'work',
         })
@@ -121,13 +145,13 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
           description: (event.extendedProps.description as string) ?? null,
           start_at:
             (event.extendedProps.start_at as string) ??
-            (event.start ? calendarDateToUtcIso(event.start, tz) : ''),
+            (event.start ? calendarDateToUtcIso(event.start) : ''),
           end_at:
             (event.extendedProps.end_at as string) ??
             (event.end
-              ? calendarDateToUtcIso(event.end, tz)
+              ? calendarDateToUtcIso(event.end)
               : event.start
-                ? calendarDateToUtcIso(event.start, tz)
+                ? calendarDateToUtcIso(event.start)
                 : ''),
           all_day: event.allDay,
           category: (event.extendedProps.category as CalendarEvent['category']) ?? 'work',
@@ -144,7 +168,7 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
       setInitialRange(null)
       setIsModalOpen(true)
     },
-    [fetchMasterEvent, tz, user?.id],
+    [fetchMasterEvent, user?.id],
   )
 
   const handleEventClick = useCallback(
@@ -197,7 +221,6 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
         event.start,
         event.end,
         event.allDay,
-        tz,
       )
 
       try {
@@ -214,7 +237,7 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
               end_at,
               all_day: event.allDay,
               category: (event.extendedProps.category as CalendarEvent['category']) ?? 'work',
-              recurrence: eventToRecurrenceRule(master, tz),
+              recurrence: eventToRecurrenceRule(master),
             },
           })
           dropInfo.revert()
@@ -230,7 +253,7 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
         dropInfo.revert()
       }
     },
-    [fetchMasterEvent, tz, updateEvent],
+    [fetchMasterEvent, updateEvent],
   )
 
   const handleEventResize = useCallback(
@@ -247,7 +270,6 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
         event.start,
         event.end,
         event.allDay,
-        tz,
       )
 
       try {
@@ -264,7 +286,7 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
               end_at,
               all_day: event.allDay,
               category: (event.extendedProps.category as CalendarEvent['category']) ?? 'work',
-              recurrence: eventToRecurrenceRule(master, tz),
+              recurrence: eventToRecurrenceRule(master),
             },
           })
           resizeInfo.revert()
@@ -280,7 +302,7 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
         resizeInfo.revert()
       }
     },
-    [fetchMasterEvent, tz, updateEvent],
+    [fetchMasterEvent, updateEvent],
   )
 
   const handleSave = useCallback(
@@ -290,6 +312,11 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
       if (eventId && selectedOriginalStartAt) {
         const master = await fetchMasterEvent(eventId)
         if (master.recurrence_freq) {
+          if (recurrenceRuleChanged(master, form)) {
+            await updateRecurringEvent(master, selectedOriginalStartAt, 'all', form)
+            return
+          }
+
           setPendingRecurringAction({
             mode: 'edit',
             master,
@@ -307,7 +334,7 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
         await createEvent(form, user.id)
       }
     },
-    [user, selectedOriginalStartAt, fetchMasterEvent, updateEvent, createEvent],
+    [user, selectedOriginalStartAt, fetchMasterEvent, updateEvent, updateRecurringEvent, createEvent],
   )
 
   const handleDelete = useCallback(
@@ -349,7 +376,7 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
           right: 'dayGridMonth timeGridWeek timeGridDay listWeek',
         }}
         locale="ko"
-        timeZone="local"
+        timeZone="UTC"
         editable
         selectable
         selectMirror
@@ -390,4 +417,5 @@ export function EventCalendar({ selectedCategories = [] }: EventCalendarProps) {
       )}
     </div>
   )
-}
+},
+)

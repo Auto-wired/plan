@@ -1,5 +1,6 @@
-import { useRef, useState, type ChangeEvent } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { useProfileContext } from '../../contexts/ProfileContext'
+import { isValidNickname } from '../../lib/authValidation'
 import type { ThemeMode } from '../../types'
 import './UserSettingsModal.css'
 
@@ -9,13 +10,18 @@ interface UserSettingsModalProps {
 }
 
 export function UserSettingsModal({ email, onClose }: UserSettingsModalProps) {
-  const { profile, uploadAvatar, setTheme } = useProfileContext()
+  const { profile, uploadAvatar, updateProfile, setTheme } = useProfileContext()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [nicknameInput, setNicknameInput] = useState(profile?.nickname ?? '')
 
   const nickname = profile?.nickname ?? '사용자'
   const initial = nickname.charAt(0).toUpperCase()
+
+  useEffect(() => {
+    setNicknameInput(profile?.nickname ?? '')
+  }, [profile?.nickname])
 
   const handleAvatarChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -30,6 +36,28 @@ export function UserSettingsModal({ email, onClose }: UserSettingsModalProps) {
     } finally {
       setLoading(false)
       e.target.value = ''
+    }
+  }
+
+  const handleNicknameSubmit = async (e: FormEvent) => {
+    e.preventDefault()
+
+    const trimmed = nicknameInput.trim()
+    if (!isValidNickname(trimmed)) {
+      setError('닉네임은 2~20자로 입력해주세요.')
+      return
+    }
+
+    if (trimmed === profile?.nickname) return
+
+    setLoading(true)
+    setError(null)
+    try {
+      await updateProfile({ nickname: trimmed })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '닉네임 변경에 실패했습니다.')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -61,6 +89,7 @@ export function UserSettingsModal({ email, onClose }: UserSettingsModalProps) {
             className="settings-avatar-btn"
             onClick={() => fileInputRef.current?.click()}
             disabled={loading}
+            aria-label="프로필 이미지 변경"
           >
             {profile?.avatar_url ? (
               <img src={profile.avatar_url} alt="" className="settings-avatar-image" />
@@ -82,15 +111,25 @@ export function UserSettingsModal({ email, onClose }: UserSettingsModalProps) {
         </div>
 
         <section className="settings-section">
-          <h3>프로필 이미지</h3>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={loading}
-          >
-            이미지 변경
-          </button>
+          <h3>닉네임</h3>
+          <form className="settings-nickname-form" onSubmit={handleNicknameSubmit}>
+            <input
+              type="text"
+              value={nicknameInput}
+              onChange={(e) => setNicknameInput(e.target.value)}
+              maxLength={20}
+              disabled={loading}
+              autoComplete="nickname"
+              placeholder="닉네임 입력"
+            />
+            <button
+              type="submit"
+              className="btn-secondary"
+              disabled={loading || nicknameInput.trim() === profile?.nickname}
+            >
+              저장
+            </button>
+          </form>
         </section>
 
         <section className="settings-section">

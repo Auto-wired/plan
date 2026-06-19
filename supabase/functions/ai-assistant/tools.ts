@@ -1,5 +1,6 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { DEFAULT_EVENT_CATEGORY, parseCategory } from './categories.ts'
+import { resolveEventQueryRange } from './dateRanges.ts'
 import type { ToolDefinition } from './providers/types.ts'
 import type { EventCategory } from './categories.ts'
 
@@ -84,12 +85,29 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'query_events',
-    description: '일정을 조회합니다.',
+    description: '일정을 조회합니다. 상대 기간(이번 주, 이번 달 등)은 period를 우선 사용하세요.',
     parameters: {
       type: 'object',
       properties: {
-        start_date: { type: 'string', description: '조회 시작일 (ISO 8601)' },
-        end_date: { type: 'string', description: '조회 종료일 (ISO 8601)' },
+        period: {
+          type: 'string',
+          enum: [
+            'today',
+            'yesterday',
+            'tomorrow',
+            'this_week',
+            'next_week',
+            'last_week',
+            'this_month',
+            'next_month',
+            'last_month',
+            'this_year',
+          ],
+          description:
+            '상대 기간. 이번 주=this_week(일요일~토요일), 이번 달=this_month, 오늘=today 등',
+        },
+        start_date: { type: 'string', description: '조회 시작일 (YYYY-MM-DD). period 미사용 시' },
+        end_date: { type: 'string', description: '조회 종료일 (YYYY-MM-DD, inclusive). period 미사용 시' },
         keyword: { type: 'string', description: '제목/설명 검색 키워드' },
         limit: { type: 'number', description: '최대 결과 수' },
       },
@@ -145,11 +163,11 @@ function parseWallClock(value: string): {
   }
 }
 
-/** 사용자 로컬 벽시계 → UTC ISO */
+/** 사용자 입력 벽시계(KST) → DB ISO (보정 없이 Z만 붙임) */
 function toUtcTimestamp(
   value: unknown,
   field: string,
-  timezone: string,
+  _timezone: string,
   allDay = false,
 ): string {
   if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
@@ -161,37 +179,7 @@ function toUtcTimestamp(
     ? `${parts.year}-${parts.month}-${parts.day}T00:00:00`
     : `${parts.year}-${parts.month}-${parts.day}T${pad2(Number(parts.hour))}:${pad2(Number(parts.minute))}:${pad2(Number(parts.second))}`
 
-  const utcDate = zonedTimeToUtc(wallClock, timezone)
-  return utcDate.toISOString()
-}
-
-function zonedTimeToUtc(wallClock: string, timezone: string): Date {
-  const [datePart, timePart = '00:00:00'] = wallClock.split('T')
-  const [year, month, day] = datePart.split('-').map(Number)
-  const [hour, minute, second = 0] = timePart.split(':').map(Number)
-
-  const utcGuess = Date.UTC(year, month - 1, day, hour, minute, second)
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  })
-
-  for (let offset = -16; offset <= 16; offset++) {
-    const candidate = new Date(utcGuess + offset * 60 * 60 * 1000)
-    const formatted = formatter.format(candidate).replace(', ', 'T')
-    const normalized = formatted.length === 16 ? `${formatted}:00` : formatted
-    if (normalized === wallClock || normalized.startsWith(wallClock.slice(0, 16))) {
-      return candidate
-    }
-  }
-
-  return new Date(utcGuess)
+  return `${wallClock}.000Z`
 }
 
 function recurrencePayload(args: Record<string, unknown>, timezone: string) {
@@ -228,6 +216,7 @@ export async function executeTool(
   name: string,
   args: Record<string, unknown>,
   timezone = 'UTC',
+  currentDate = new Date().toISOString(),
 ): Promise<{ result: unknown; events: CalendarEvent[] }> {
   switch (name) {
     case 'create_event': {
@@ -304,23 +293,37 @@ export async function executeTool(
     case 'query_events': {
       let query = supabase.from('events').select('*').order('start_at', { ascending: true })
 
-      if (args.start_date) {
-        query = query.gte('start_at', toUtcTimestamp(args.start_date, 'start_date', timezone, true))
+      const range = resolveEventQueryRange(args, currentDate, timezone)
+      if (range) {
+        query = query
+          .lt('start_at', range.endUtcExclusive)
+          .gte('end_at', range.startUtc)
       }
-      if (args.end_date) {
-        query = query.lte('end_at', toUtcTimestamp(args.end_date, 'end_date', timezone, true))
-      }
+
       if (args.keyword) {
         const keyword = String(args.keyword)
         query = query.or(`title.ilike.%${keyword}%,description.ilike.%${keyword}%`)
       }
 
-      const limit = typeof args.limit === 'number' ? args.limit : 20
+      const limit = typeof args.limit === 'number' ? args.limit : 100
       query = query.limit(limit)
 
       const { data, error } = await query
       if (error) throw error
-      return { result: { count: data?.length ?? 0, events: data }, events: (data ?? []) as CalendarEvent[] }
+      return {
+        result: {
+          count: data?.length ?? 0,
+          events: data,
+          range: range
+            ? {
+                label: range.label,
+                start_date: range.startDate,
+                end_date: range.endDate,
+              }
+            : null,
+        },
+        events: (data ?? []) as CalendarEvent[],
+      }
     }
 
     default:
@@ -336,13 +339,18 @@ User timezone: ${timezone}
 
 Rules:
 - Use tools to create, update, delete, or query events. Do not invent event data.
-- Parse relative dates ("tomorrow", "next Monday", "내일", "다음 주") using the current date and timezone.
+- For event queries with relative ranges, prefer query_events.period instead of guessing start_date/end_date.
+- Period mapping: "이번 주"/"이번주" → this_week (Sunday–Saturday, includes already-ended days in the week), "이번 달" → this_month (1st–last day), "오늘" → today, "내일" → tomorrow, "다음 주" → next_week, "지난 주" → last_week, "다음 달" → next_month, "지난 달" → last_month, "올해" → this_year.
+- Do NOT interpret "이번 주" as "from today for 7 days". Always use the calendar week (Sunday through Saturday).
+- Do NOT interpret "이번 달" as "from today to month end". Always use the full calendar month.
+- For absolute date ranges, pass start_date and end_date as YYYY-MM-DD (inclusive on both ends).
+- Parse other relative dates ("next Monday", "다음 주 월요일") using the current date and timezone.
 - If the request is ambiguous (missing time, title, or target event), ask a clarifying question instead of calling tools.
 - For update/delete, if multiple events match, query first and ask the user to confirm which one.
 - After tool execution, summarize what was done in natural Korean.
 - For queries, provide a helpful summary of the results.
 - All datetime values passed to tools should use the user's local wall-clock in ${timezone}.
-- Timestamps are stored in the database as UTC. Provide local times in tool arguments.
+- Timestamps are stored in the database as KST wall-clock values with a Z suffix. Pass KST times directly in tool arguments without timezone conversion.
 - Event categories: work (업무), life (일상), appointment (약속). Infer category from context when creating events.
 - All-day events (종일): set all_day=true and use date-only values (YYYY-MM-DD). end_at is the last day inclusive.
 - Multi-day all-day (e.g. Mon–Thu): all_day=true, start_at=first day, end_at=last day, both date-only.

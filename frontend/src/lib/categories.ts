@@ -8,6 +8,12 @@ export type EventCategory = (typeof EVENT_CATEGORIES)[number]['value']
 
 export const DEFAULT_EVENT_CATEGORY: EventCategory = 'work'
 
+export const ALL_EVENT_CATEGORIES: EventCategory[] = EVENT_CATEGORIES.map((category) => category.value)
+
+export function isAllCategoriesSelected(selected: EventCategory[]): boolean {
+  return selected.length === ALL_EVENT_CATEGORIES.length
+}
+
 export function getCategoryColor(category: EventCategory | string | null | undefined): string {
   const found = EVENT_CATEGORIES.find((c) => c.value === category)
   return found?.color ?? EVENT_CATEGORIES[0].color
@@ -26,6 +32,6 @@ export function matchesCategoryFilter(
   category: EventCategory | string | null | undefined,
   selected: EventCategory[],
 ): boolean {
-  if (selected.length === 0) return true
+  if (selected.length === 0 || isAllCategoriesSelected(selected)) return true
   return selected.includes((category ?? DEFAULT_EVENT_CATEGORY) as EventCategory)
 }

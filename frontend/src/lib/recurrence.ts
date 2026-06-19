@@ -1,5 +1,5 @@
 import { addDays, addMonths, addWeeks, addYears, isAfter, isBefore } from 'date-fns'
-import { normalizeDbTimestamp, parseUtcIso } from './datetime'
+import { calendarDateToUtcIso, normalizeDbTimestamp, parseWallClockDate } from './datetime'
 import type {
   CalendarEvent,
   DateRange,
@@ -22,7 +22,7 @@ function advanceDate(date: Date, freq: RecurrenceFreq, interval: number): Date {
 }
 
 function getDurationMs(event: CalendarEvent): number {
-  return parseUtcIso(event.end_at).getTime() - parseUtcIso(event.start_at).getTime()
+  return parseWallClockDate(event.end_at).getTime() - parseWallClockDate(event.start_at).getTime()
 }
 
 function buildInstance(
@@ -31,12 +31,12 @@ function buildInstance(
 ): ExpandedCalendarEvent {
   const duration = getDurationMs(master)
   const end = new Date(originalStart.getTime() + duration)
-  const originalStartAt = originalStart.toISOString()
+  const originalStartAt = calendarDateToUtcIso(originalStart)
 
   return {
     ...master,
     start_at: originalStartAt,
-    end_at: end.toISOString(),
+    end_at: calendarDateToUtcIso(end),
     instanceId: `${master.id}_${originalStartAt}`,
     masterId: master.id,
     originalStartAt,
@@ -71,9 +71,9 @@ export function expandRecurringEvent(
   const instances: ExpandedCalendarEvent[] = []
   const rangeStart = range.start
   const rangeEnd = range.end
-  let current = parseUtcIso(master.start_at)
-  const masterStart = parseUtcIso(master.start_at)
-  const until = master.recurrence_until ? parseUtcIso(master.recurrence_until) : null
+  let current = parseWallClockDate(master.start_at)
+  const masterStart = parseWallClockDate(master.start_at)
+  const until = master.recurrence_until ? parseWallClockDate(master.recurrence_until) : null
   const maxCount = master.recurrence_count ?? Infinity
   let count = 0
   const interval = master.recurrence_interval || 1
@@ -139,7 +139,7 @@ export function isRecurringMaster(event: CalendarEvent): boolean {
 }
 
 export function overlapsRange(event: CalendarEvent, range: DateRange): boolean {
-  const start = parseUtcIso(event.start_at)
-  const end = parseUtcIso(event.end_at)
+  const start = parseWallClockDate(event.start_at)
+  const end = parseWallClockDate(event.end_at)
   return start < range.end && end > range.start
 }
