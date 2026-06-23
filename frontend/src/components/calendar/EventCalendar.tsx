@@ -586,6 +586,7 @@ export const EventCalendar = forwardRef<EventCalendarHandle, EventCalendarProps>
         eventDisplay="block"
         now={getCalendarNow()}
         editable
+        eventResizableFromStart
         selectable
         selectMirror
         dayMaxEvents
