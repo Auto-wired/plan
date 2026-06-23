@@ -77,12 +77,34 @@ export interface AIAction {
 
 export type AIResultKind = 'create' | 'update' | 'delete' | 'query'
 
+export interface SessionEventRef {
+  id: string
+  title: string
+  start_at: string
+}
+
+export interface SessionLastQueryResolved {
+  resolved_label: string
+  resolved_date?: string
+  weekday_ko?: string
+  start_date: string
+  end_date: string
+}
+
+export interface SessionContext {
+  lastQuery?: {
+    resolved: SessionLastQueryResolved
+    events: SessionEventRef[]
+  }
+}
+
 export interface AIQueryInfo {
   args: Record<string, unknown>
   total: number
   offset: number
   limit: number
   hasMore: boolean
+  resolved?: SessionLastQueryResolved | null
 }
 
 export interface AIPendingAction {

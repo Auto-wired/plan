@@ -1,7 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { createProvider } from './providers/index.ts'
 import type { Message } from './providers/types.ts'
-import { type QueryPeriod } from './dateRanges.ts'
 import {
   buildSystemPrompt,
   buildUpdateFields,
@@ -10,6 +9,12 @@ import {
   QUERY_DEFAULT_LIMIT,
   TOOL_DEFINITIONS,
 } from './tools.ts'
+import {
+  canonicalQueryArgsForPagination,
+  resolvedToSessionLastQuery,
+  resolveQuerySchedule,
+} from './resolveSchedule.ts'
+import type { SessionContext } from './scheduleSpec.ts'
 import {
   countRemaining,
   deleteRecurringByScope,
@@ -38,6 +43,7 @@ interface RequestBody {
   conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>
   currentDate?: string
   timezone?: string
+  sessionContext?: SessionContext
   /** 'paginate' = 더보기(LLM 미호출), 'confirm' = 되묻기 승인 후 실행(LLM 미호출). */
   mode?: 'paginate' | 'confirm'
   queryArgs?: Record<string, unknown>
@@ -76,6 +82,7 @@ interface QueryInfo {
   offset: number
   limit: number
   hasMore: boolean
+  resolved?: ReturnType<typeof resolvedToSessionLastQuery> | null
 }
 
 interface AIAction {
@@ -83,39 +90,76 @@ interface AIAction {
   result: unknown
 }
 
-const MESSAGE_PERIOD_PATTERNS: Array<{ pattern: RegExp; period: QueryPeriod }> = [
-  { pattern: /이번\s*주|this\s*week/i, period: 'this_week' },
-  { pattern: /다음\s*주|next\s*week/i, period: 'next_week' },
-  { pattern: /지난\s*주|last\s*week/i, period: 'last_week' },
-  { pattern: /이번\s*달|this\s*month/i, period: 'this_month' },
-  { pattern: /다음\s*달|next\s*month/i, period: 'next_month' },
-  { pattern: /지난\s*달|last\s*month/i, period: 'last_month' },
-  { pattern: /올해|금년|this\s*year/i, period: 'this_year' },
-  { pattern: /\b오늘\b|\btoday\b/i, period: 'today' },
-  { pattern: /\b내일\b|\btomorrow\b/i, period: 'tomorrow' },
-  { pattern: /\b어제\b|\byesterday\b/i, period: 'yesterday' },
+const MESSAGE_SCHEDULE_PATTERNS: Array<{
+  pattern: RegExp
+  date: Record<string, unknown>
+}> = [
+  { pattern: /다다음\s*주/, date: { kind: 'week', week_offset: 2 } },
+  { pattern: /다음\s*주|next\s*week/i, date: { kind: 'week', week_offset: 1 } },
+  { pattern: /지난\s*주|last\s*week/i, date: { kind: 'week', week_offset: -1 } },
+  { pattern: /이번\s*주|this\s*week/i, date: { kind: 'week', week_offset: 0 } },
+  { pattern: /이번\s*달|this\s*month/i, date: { kind: 'month_span', month_offset: 0 } },
+  { pattern: /다음\s*달|next\s*month/i, date: { kind: 'month_span', month_offset: 1 } },
+  { pattern: /지난\s*달|last\s*month/i, date: { kind: 'month_span', month_offset: -1 } },
+  { pattern: /올해|금년|this\s*year/i, date: { kind: 'year', year_offset: 0 } },
+  { pattern: /\b모레\b/, date: { kind: 'day', day_offset: 2 } },
+  { pattern: /\b글피\b/, date: { kind: 'day', day_offset: 3 } },
+  { pattern: /\b내일\b|\btomorrow\b/i, date: { kind: 'day', day_offset: 1 } },
+  { pattern: /\b어제\b|\byesterday\b/i, date: { kind: 'day', day_offset: -1 } },
+  { pattern: /\b오늘\b|\btoday\b/i, date: { kind: 'day', day_offset: 0 } },
 ]
 
-function inferQueryPeriodFromMessage(message: string): QueryPeriod | null {
-  for (const { pattern, period } of MESSAGE_PERIOD_PATTERNS) {
-    if (pattern.test(message)) return period
+
+function inferWeekdayFromMessage(message: string): string | null {
+  const map: Record<string, string> = {
+    일요일: 'sun',
+    월요일: 'mon',
+    화요일: 'tue',
+    수요일: 'wed',
+    목요일: 'thu',
+    금요일: 'fri',
+    토요일: 'sat',
+  }
+  for (const [ko, en] of Object.entries(map)) {
+    if (message.includes(ko)) return en
   }
   return null
 }
 
-function enrichQueryEventArgs(
+function inferScheduleSpecFromMessage(message: string): Record<string, unknown> | null {
+  for (const { pattern, date } of MESSAGE_SCHEDULE_PATTERNS) {
+    if (pattern.test(message)) {
+      const weekday = inferWeekdayFromMessage(message)
+      const dateSpec = { ...date } as Record<string, unknown>
+      if (weekday && dateSpec.kind === 'week') {
+        dateSpec.weekday = weekday
+      }
+      return { date: dateSpec }
+    }
+  }
+  const weekday = inferWeekdayFromMessage(message)
+  if (weekday) {
+    return { date: { kind: 'week', week_offset: 0, weekday } }
+  }
+  return null
+}
+
+function enrichScheduleSpec(
   toolName: string,
   args: Record<string, unknown>,
   userMessage: string,
 ): Record<string, unknown> {
   if (toolName !== 'query_events') return args
+  if (args.schedule_spec) return args
 
-  const inferred = inferQueryPeriodFromMessage(userMessage)
+  const inferred = inferScheduleSpecFromMessage(userMessage)
   if (!inferred) return args
 
   return {
     ...args,
-    period: inferred,
+    schedule_spec: inferred,
+    period: undefined,
+    weekday: undefined,
     start_date: undefined,
     end_date: undefined,
   }
@@ -155,17 +199,20 @@ Deno.serve(async (req) => {
     }
 
     const body: RequestBody = await req.json()
-    const { message, conversationHistory = [], currentDate, mode, queryArgs } = body
+    const { message, conversationHistory = [], currentDate, mode, queryArgs, sessionContext } =
+      body
     const effectiveDate = currentDate ?? new Date().toISOString()
 
     // 더보기: LLM 없이 동일 조건으로 추가 페이지만 조회
     if (mode === 'paginate') {
       const offset = typeof body.offset === 'number' ? body.offset : 0
+      const paginateArgs = { ...(queryArgs ?? {}), offset }
+      const resolvedSchedule = resolveQuerySchedule(paginateArgs, effectiveDate, APP_TIMEZONE)
       const { result, events } = await executeTool(
         supabase,
         user.id,
         'query_events',
-        { ...(queryArgs ?? {}), offset },
+        paginateArgs,
         APP_TIMEZONE,
         effectiveDate,
       )
@@ -176,11 +223,12 @@ Deno.serve(async (req) => {
         hasMore?: boolean
       }
       const query: QueryInfo = {
-        args: queryArgs ?? {},
+        args: canonicalQueryArgsForPagination(paginateArgs, resolvedSchedule),
         total: r.total ?? events.length,
         offset: r.offset ?? offset,
         limit: r.limit ?? QUERY_DEFAULT_LIMIT,
         hasMore: r.hasMore ?? false,
+        resolved: resolvedSchedule ? resolvedToSessionLastQuery(resolvedSchedule) : null,
       }
       return new Response(
         JSON.stringify({ reply: '', actions: [], events, resultKind: 'query', query }),
@@ -263,7 +311,7 @@ Deno.serve(async (req) => {
     }
 
     const provider = createProvider()
-    const systemPrompt = buildSystemPrompt(effectiveDate, APP_TIMEZONE)
+    const systemPrompt = buildSystemPrompt(effectiveDate, APP_TIMEZONE, sessionContext)
 
     const messages: Message[] = [
       ...conversationHistory.map((m) => ({
@@ -395,7 +443,7 @@ Deno.serve(async (req) => {
         }
 
         try {
-          const toolArgs = enrichQueryEventArgs(
+          const toolArgs = enrichScheduleSpec(
             toolCall.name,
             toolCall.arguments,
             message,
@@ -416,13 +464,23 @@ Deno.serve(async (req) => {
 
           resultKind = TOOL_RESULT_KIND[toolCall.name] ?? resultKind
           if (toolCall.name === 'query_events' && result && typeof result === 'object') {
-            const r = result as { total?: number; offset?: number; limit?: number; hasMore?: boolean }
+            const r = result as {
+              total?: number
+              offset?: number
+              limit?: number
+              hasMore?: boolean
+              resolved?: Record<string, unknown> | null
+            }
+            const resolvedSchedule = resolveQuerySchedule(toolArgs, effectiveDate, APP_TIMEZONE)
             queryInfo = {
-              args: toolArgs,
+              args: canonicalQueryArgsForPagination(toolArgs, resolvedSchedule),
               total: r.total ?? events.length,
               offset: r.offset ?? 0,
               limit: r.limit ?? QUERY_DEFAULT_LIMIT,
               hasMore: r.hasMore ?? false,
+              resolved: resolvedSchedule
+                ? resolvedToSessionLastQuery(resolvedSchedule)
+                : null,
             }
           }
 

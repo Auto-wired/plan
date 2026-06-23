@@ -45,6 +45,97 @@ export function normalizeQueryPeriod(value: string): QueryPeriod | null {
   return PERIOD_ALIASES[normalized] ?? PERIOD_ALIASES[value.trim()] ?? null
 }
 
+export type QueryWeekday = 'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat'
+
+const WEEKDAY_KO = [
+  '일요일',
+  '월요일',
+  '화요일',
+  '수요일',
+  '목요일',
+  '금요일',
+  '토요일',
+] as const
+
+const WEEKDAY_ALIASES: Record<string, QueryWeekday> = {
+  sun: 'sun',
+  sunday: 'sun',
+  일: 'sun',
+  일요일: 'sun',
+  mon: 'mon',
+  monday: 'mon',
+  월: 'mon',
+  월요일: 'mon',
+  tue: 'tue',
+  tuesday: 'tue',
+  화: 'tue',
+  화요일: 'tue',
+  wed: 'wed',
+  wednesday: 'wed',
+  수: 'wed',
+  수요일: 'wed',
+  thu: 'thu',
+  thursday: 'thu',
+  목: 'thu',
+  목요일: 'thu',
+  fri: 'fri',
+  friday: 'fri',
+  금: 'fri',
+  금요일: 'fri',
+  sat: 'sat',
+  saturday: 'sat',
+  토: 'sat',
+  토요일: 'sat',
+}
+
+export function normalizeQueryWeekday(value: string): QueryWeekday | null {
+  const trimmed = value.trim()
+  const lower = trimmed.toLowerCase()
+  return WEEKDAY_ALIASES[lower] ?? WEEKDAY_ALIASES[trimmed] ?? null
+}
+
+export function weekdayToDayNumber(weekday: QueryWeekday): number {
+  const map: Record<QueryWeekday, number> = {
+    sun: 0,
+    mon: 1,
+    tue: 2,
+    wed: 3,
+    thu: 4,
+    fri: 5,
+    sat: 6,
+  }
+  return map[weekday]
+}
+
+/** YYYY-MM-DD → 0=일 … 6=토 (KST 날짜 부분 기준) */
+export function getDateWeekdayNumber(dateStr: string): number {
+  return getLocalDayOfWeek(dateStr.slice(0, 10), 'UTC')
+}
+
+export function formatKoreanWeekday(dateStr: string): string {
+  return WEEKDAY_KO[getDateWeekdayNumber(dateStr.slice(0, 10))]
+}
+
+export function buildKstCalendarContext(referenceIso: string, timezone: string): string {
+  const today = getLocalDateString(referenceIso, timezone)
+  const tomorrow = addDaysToDateString(today, 1)
+  const thisWeek = resolveQueryPeriod('this_week', referenceIso, timezone)
+
+  const lines = [
+    `Today (KST): ${today} (${formatKoreanWeekday(today)})`,
+    `Tomorrow (KST): ${tomorrow} (${formatKoreanWeekday(tomorrow)})`,
+    `This calendar week (Sun–Sat, KST): ${thisWeek.startDate} ~ ${thisWeek.endDate}`,
+    'Days this week (KST):',
+  ]
+
+  for (let i = 0; i < 7; i++) {
+    const date = addDaysToDateString(thisWeek.startDate, i)
+    lines.push(`  ${date}: ${formatKoreanWeekday(date)}`)
+  }
+
+  return lines.join('\n')
+}
+
 function pad2(n: number): string {
   return String(n).padStart(2, '0')
 }

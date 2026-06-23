@@ -1,6 +1,13 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { DEFAULT_EVENT_CATEGORY, parseCategory } from './categories.ts'
-import { resolveEventQueryRange } from './dateRanges.ts'
+import {
+  buildKstCalendarContext,
+  getDateWeekdayNumber,
+} from './dateRanges.ts'
+import {
+  resolveQuerySchedule,
+} from './resolveSchedule.ts'
+import type { SessionContext } from './scheduleSpec.ts'
 import { expandOccurrences, type RecurrenceExceptionRow } from './recurrence.ts'
 import type { RecurringUpdateFields } from './recurrenceActions.ts'
 import type { ToolDefinition } from './providers/types.ts'
@@ -28,7 +35,7 @@ function matchesTimePeriod(event: CalendarEvent, period: string): boolean {
 }
 
 function matchesDayType(event: CalendarEvent, dayType: string): boolean {
-  const day = new Date(event.start_at).getUTCDay() // 0=일 .. 6=토 (KST)
+  const day = getDateWeekdayNumber(event.start_at.slice(0, 10))
   const isWeekend = day === 0 || day === 6
   return dayType === 'weekend' ? isWeekend : !isWeekend
 }
@@ -132,10 +139,42 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'query_events',
-    description: '일정을 조회합니다. 상대 기간(이번 주, 이번 달 등)은 period를 우선 사용하세요.',
+    description:
+      '일정을 조회합니다. 상대 날짜는 schedule_spec을 우선 사용하세요. legacy period/start_date도 호환됩니다.',
     parameters: {
       type: 'object',
       properties: {
+        schedule_spec: {
+          type: 'object',
+          description:
+            '날짜 의도(권장). date.kind: absolute|day|week|month_span|year. 예: 다다음주 수요일 → { date: { kind:"week", week_offset:2, weekday:"wed" } }, 내일 → { date: { kind:"day", day_offset:1 } }',
+          properties: {
+            date: {
+              type: 'object',
+              properties: {
+                kind: {
+                  type: 'string',
+                  enum: ['absolute', 'day', 'week', 'month_span', 'year'],
+                },
+                start_date: { type: 'string' },
+                end_date: { type: 'string' },
+                day_offset: { type: 'number', description: '0=오늘, 1=내일, 2=모레, 3=글피' },
+                week_offset: {
+                  type: 'number',
+                  description: '0=이번주, 1=다음주, 2=다다음주, -1=지난주',
+                },
+                month_offset: { type: 'number', description: '0=이번달, 1=다음달' },
+                year_offset: { type: 'number' },
+                weekday: {
+                  type: 'string',
+                  enum: ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'],
+                },
+              },
+              required: ['kind'],
+            },
+          },
+          required: ['date'],
+        },
         period: {
           type: 'string',
           enum: [
@@ -150,11 +189,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             'last_month',
             'this_year',
           ],
-          description:
-            '상대 기간. 이번 주=this_week(일요일~토요일), 이번 달=this_month, 오늘=today 등',
+          description: 'legacy. schedule_spec 미사용 시만. 이번 주=this_week(일~토)',
         },
-        start_date: { type: 'string', description: '조회 시작일 (YYYY-MM-DD). period 미사용 시' },
-        end_date: { type: 'string', description: '조회 종료일 (YYYY-MM-DD, inclusive). period 미사용 시' },
+        start_date: { type: 'string', description: 'legacy. 조회 시작일 (YYYY-MM-DD)' },
+        end_date: { type: 'string', description: 'legacy. 조회 종료일 (YYYY-MM-DD, inclusive)' },
         keyword: { type: 'string', description: '제목/설명 검색 키워드' },
         time_period: {
           type: 'string',
@@ -166,6 +204,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'string',
           enum: ['weekend', 'weekday'],
           description: '주말(토·일)=weekend, 평일(월~금)=weekday',
+        },
+        weekday: {
+          type: 'string',
+          enum: ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'],
+          description:
+            'legacy. schedule_spec.date.weekday 권장. "수요일 일정" → schedule_spec { kind:week, week_offset:0, weekday:wed }',
         },
         limit: { type: 'number', description: '최대 결과 수 (기본 20)' },
         offset: { type: 'number', description: '건너뛸 개수 (더보기용, 기본 0)' },
@@ -415,12 +459,23 @@ export async function executeTool(
     }
 
     case 'query_events': {
-      const range = resolveEventQueryRange(args, currentDate, timezone)
-      const keyword = args.keyword ? String(args.keyword) : null
-      const timePeriod = args.time_period ? String(args.time_period) : null
-      const dayType = args.day_type ? String(args.day_type) : null
-      const limit = typeof args.limit === 'number' ? args.limit : QUERY_DEFAULT_LIMIT
-      const offset = typeof args.offset === 'number' ? args.offset : 0
+      const queryArgs = { ...args }
+      const resolved = resolveQuerySchedule(queryArgs, currentDate, timezone)
+      const range = resolved
+        ? {
+            startDate: resolved.startDate,
+            endDate: resolved.endDate,
+            startUtc: resolved.startUtc,
+            endUtcExclusive: resolved.endUtcExclusive,
+            label: resolved.label,
+          }
+        : null
+
+      const keyword = queryArgs.keyword ? String(queryArgs.keyword) : null
+      const timePeriod = queryArgs.time_period ? String(queryArgs.time_period) : null
+      const dayType = queryArgs.day_type ? String(queryArgs.day_type) : null
+      const limit = typeof queryArgs.limit === 'number' ? queryArgs.limit : QUERY_DEFAULT_LIMIT
+      const offset = typeof queryArgs.offset === 'number' ? queryArgs.offset : 0
 
       // 1) 비반복 일정: 범위 겹침으로 직접 조회
       let singlesQuery = supabase.from('events').select('*').is('recurrence_freq', null)
@@ -503,6 +558,18 @@ export async function executeTool(
       const total = all.length
       const page = all.slice(offset, offset + limit)
 
+      const resolvedPayload = resolved
+        ? {
+            resolved_label: resolved.resolved_label,
+            resolved_date: resolved.resolved_date,
+            weekday_ko: resolved.weekday_ko,
+            start_date: resolved.startDate,
+            end_date: resolved.endDate,
+            granularity: resolved.granularity,
+            confidence: resolved.confidence,
+          }
+        : null
+
       return {
         result: {
           count: page.length,
@@ -514,6 +581,7 @@ export async function executeTool(
           range: range
             ? { label: range.label, start_date: range.startDate, end_date: range.endDate }
             : null,
+          resolved: resolvedPayload,
         },
         events: page,
       }
@@ -524,33 +592,61 @@ export async function executeTool(
   }
 }
 
-export function buildSystemPrompt(currentDate: string, timezone: string): string {
+export function buildSystemPrompt(
+  currentDate: string,
+  timezone: string,
+  sessionContext?: SessionContext,
+): string {
+  const calendarContext = buildKstCalendarContext(currentDate, timezone)
+
+  let sessionBlock = ''
+  if (sessionContext?.lastQuery) {
+    const { resolved, events } = sessionContext.lastQuery
+    const eventLines = events
+      .slice(0, 20)
+      .map((e) => `  - id=${e.id} title="${e.title}" start_at=${e.start_at}`)
+      .join('\n')
+    sessionBlock = `
+Session context (last query — use for follow-up update/delete):
+Resolved: ${resolved.resolved_label}${resolved.weekday_ko ? ` (${resolved.weekday_ko})` : ''} ${resolved.start_date}${resolved.end_date !== resolved.start_date ? ` ~ ${resolved.end_date}` : ''}
+Events from last query:
+${eventLines || '  (none)'}
+- For follow-up like "그거 삭제", use id from this list only. If unclear or multiple matches, use propose_action — never guess.
+`
+  }
+
   return `You are a calendar assistant for a schedule management app. Respond in Korean.
 
-Current date/time: ${currentDate}
-Timezone: Always KST (Asia/Seoul). Interpret every date/time as KST.
-
+${calendarContext}
+Reference ISO (UTC): ${currentDate}
+Timezone: Always KST (Asia/Seoul).
+${sessionBlock}
 Rules:
 - Use tools to create, update, delete, or query events. Do not invent event data.
-- For event queries with relative ranges, prefer query_events.period instead of guessing start_date/end_date.
-- Period mapping: "이번 주"/"이번주" → this_week (Sunday–Saturday), "이번 달" → this_month (1st–last day), "오늘" → today, "내일" → tomorrow, "다음 주" → next_week, "지난 주" → last_week, "다음 달" → next_month, "지난 달" → last_month, "올해" → this_year.
-- Do NOT interpret "이번 주" as "from today for 7 days". Always use the calendar week (Sunday through Saturday).
-- Do NOT interpret "이번 달" as "from today to month end". Always use the full calendar month.
-- For absolute date ranges, pass start_date and end_date as YYYY-MM-DD (inclusive on both ends).
-- Date defaults: if the year is omitted, use the current year. If the month is omitted (e.g. "30일"), use the current month.
-- Parse other relative dates ("다음 주 월요일") using the current date in KST.
+- For event queries, prefer query_events.schedule_spec (structured date). Do NOT guess start_date/end_date for relative phrases.
+- schedule_spec mapping:
+  - 오늘/내일/모레/글피 → date.kind=day, day_offset 0/1/2/3
+  - N일 뒤/전 → date.kind=day, day_offset=N (negative for past)
+  - 이번 주/다음 주/다다음 주 → date.kind=week, week_offset 0/1/2 (calendar week Sun–Sat)
+  - 이번 주 수요일 → week_offset 0 + weekday wed; 다음 주 수요일 → week_offset 1 + weekday wed
+  - 이번 달/다음 달 → date.kind=month_span, month_offset 0/1
+  - 올해 → date.kind=year, year_offset 0
+  - 절대 날짜 → date.kind=absolute, start_date (and end_date if range)
+- legacy period/weekday/start_date still work but schedule_spec is preferred.
+- Do NOT interpret "이번 주" as "from today for 7 days". Always calendar week (Sunday–Saturday).
+- In replies for queries, use ONLY result.resolved (resolved_label, weekday_ko, start_date/end_date) and listed events. Do NOT recalculate weekdays or add speculative footnotes.
 
 Time-of-day filter (query_events.time_period):
 - Words map to: 새벽=dawn(01-05), 아침=morning(06-09), 오전=forenoon(00-11), 낮=daytime(06-17), 오후=afternoon(12-23), 저녁=evening(18-20), 밤=night(21-23). "밤" stays same-day (no past midnight).
 - If multiple words overlap for one event, the narrowest word wins (dawn → morning → evening → night → daytime → forenoon/afternoon).
 - IMPORTANT: If the user gives a concrete clock time (e.g. "9시", "오전 9시", "새벽 9시"), use that exact hour and DO NOT set time_period. A clock time always overrides the time-of-day word ("새벽 9시" means 09:00, not 01-05).
 - Weekend/weekday: 주말 → day_type=weekend (Sat/Sun), 평일 → day_type=weekday (Mon-Fri).
-- Combine period/date + time_period + day_type + keyword as AND.
+- Combine schedule_spec/date + time_period + day_type + keyword as AND.
 
 Confirmation:
 - Deletion always requires user confirmation. To delete, call delete_event with the target id (query first to find the id if needed). The app shows a confirm dialog and runs the deletion only after the user agrees — so do NOT additionally ask "삭제할까요?" in text.
 - If the request is ambiguous (unclear target, date, time, or intent), do NOT call create_event/update_event/delete_event directly. Instead call propose_action with a Korean question and your best-guess action; the user will confirm with 맞다/아니다.
-- For update/delete, if multiple events match, query first; if still ambiguous which one, use propose_action.
+- For update/delete, if multiple events match, query first; if still ambiguous which one, use propose_action. Never auto-pick among multiple candidates.
 - Adding events and clearly-specified updates do NOT need confirmation — just call the tool.
 
 Recurring update/delete:

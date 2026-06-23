@@ -57,6 +57,7 @@ Plan 일정 관리 앱의 **사용자 관점 기능 명세**입니다.
 |------|------|
 | [PROFILE.md](./PROFILE.md) | 프로필·개인 설정 |
 | [AI_ASSISTANT.md](./AI_ASSISTANT.md) | AI 어시스턴트 (고도화 1·2·3차 ✅) |
+| [SCHEDULE_RESOLUTION.md](./SCHEDULE_RESOLUTION.md) | 일정 날짜 해석 (ScheduleSpec V1) |
 
 ---
 

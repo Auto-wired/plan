@@ -7,6 +7,7 @@ import type {
   AIResponse,
   AIResultKind,
   ChatMessage,
+  SessionContext,
 } from '../types'
 
 const AI_TIMEZONE = 'Asia/Seoul'
@@ -29,6 +30,7 @@ export function useAIChat() {
   const [lastEvents, setLastEvents] = useState<AIResponse['events']>([])
   const [lastResultKind, setLastResultKind] = useState<AIResultKind | null>(null)
   const [lastQuery, setLastQuery] = useState<AIQueryInfo | null>(null)
+  const [sessionContext, setSessionContext] = useState<SessionContext | undefined>(undefined)
   const [pendingConfirmation, setPendingConfirmation] =
     useState<AIPendingConfirmation | null>(null)
 
@@ -57,6 +59,7 @@ export function useAIChat() {
               conversationHistory,
               currentDate: new Date().toISOString(),
               timezone: AI_TIMEZONE,
+              sessionContext,
             },
           },
         )
@@ -74,6 +77,22 @@ export function useAIChat() {
           setLastEvents(data.events ?? [])
           setLastResultKind(data.resultKind ?? null)
           setLastQuery(data.query ?? null)
+          if (
+            data.resultKind === 'query' &&
+            data.query?.resolved &&
+            (data.events?.length ?? 0) >= 0
+          ) {
+            setSessionContext({
+              lastQuery: {
+                resolved: data.query.resolved,
+                events: (data.events ?? []).map((e) => ({
+                  id: e.id,
+                  title: e.title,
+                  start_at: e.start_at,
+                })),
+              },
+            })
+          }
         }
 
         if (data.actions?.length) {
@@ -87,7 +106,7 @@ export function useAIChat() {
         setIsLoading(false)
       }
     },
-    [isLoading, messages, queryClient],
+    [isLoading, messages, queryClient, sessionContext],
   )
 
   /** 동일 조회 조건으로 다음 페이지를 LLM 호출 없이 불러온다. */
@@ -180,6 +199,7 @@ export function useAIChat() {
     setLastEvents([])
     setLastResultKind(null)
     setLastQuery(null)
+    setSessionContext(undefined)
     setPendingConfirmation(null)
     setError(null)
   }, [])

@@ -86,8 +86,22 @@
 ### 4-6. 조합
 
 - **기간 + 시간대**는 **AND** ("이번 주 저녁" → 이번 주 ∧ 저녁 구간).
-- **주말 / 평일** = 토·일 / 월~금.
+- **주말 / 평일** = 토·일 / 월~금 (`day_type`).
+- **특정 요일** = `weekday` (mon~sun). 일정 **시작일(KST)** 기준. "수요일 일정" → `weekday=wed` + `period=this_week`(기본). "다음 주 수요일" → `weekday=wed` + `period=next_week`.
 - 키워드(제목·설명)와도 AND로 조합한다.
+
+### 4-7. KST 캘린더 컨텍스트 (시스템 프롬프트)
+
+Edge Function이 **오늘·내일·이번 주(일~토) 날짜·요일**을 코드로 계산해 LLM 시스템 프롬프트에 포함한다.  
+LLM은 이 블록과 `query_events` 결과의 **`resolved`** 만으로 날짜·요일을 답하고, **요일을 재계산하거나 추측 참고("혹시 ~ 수요일?")를 붙이지 않는다.**
+
+### 4-8. Schedule Resolution (V1)
+
+상대·절대 날짜 해석은 [SCHEDULE_RESOLUTION.md](./SCHEDULE_RESOLUTION.md)를 따른다.
+
+- LLM → `schedule_spec` (구조화) · TS → `resolveSchedule` (날짜 계산)
+- 더보기는 canonical `start_date`/`end_date`만 저장
+- `sessionContext.lastQuery`로 후속 턴 id 참조
 
 ---
 
@@ -234,7 +248,9 @@
 | `frontend/src/hooks/useSpeechRecognition.ts` | Web Speech API |
 | `supabase/functions/ai-assistant/index.ts` | 요청 처리·도구 루프·confirm/paginate 모드 |
 | `supabase/functions/ai-assistant/tools.ts` | 도구 정의·실행·시스템 프롬프트 |
-| `supabase/functions/ai-assistant/dateRanges.ts` | 기간 계산 (상대 기간 enum) |
+| `supabase/functions/ai-assistant/scheduleSpec.ts` | Schedule/DateSpec 타입 |
+| `supabase/functions/ai-assistant/resolveSchedule.ts` | 날짜 해석 엔진 |
+| `supabase/functions/ai-assistant/dateRanges.ts` | KST 날짜 유틸·legacy period |
 | `supabase/functions/ai-assistant/recurrence.ts` | 조회 시 반복 회차 전개·제외 |
 | `supabase/functions/ai-assistant/recurrenceActions.ts` | AI 반복 수정·삭제 범위 처리 |
 
@@ -253,6 +269,7 @@
 | 상단 라벨 4종(조회/추가/수정/삭제) + 삭제 비클릭(스냅샷) | ✅ 구현 |
 | 조회 상한 20 / 더보기 +20 (LLM 미호출) | ✅ 구현 |
 | 시간대 필터 (표·우선순위·시작시각·OR·AND·주말/평일) | ✅ 구현 |
+| 요일 필터 (`query_events.weekday`) + KST 캘린더 프롬프트 | ✅ 구현 |
 | 날짜 기본값 (연도=올해, 월=이번 달) | ✅ 구현 |
 | 음성 인식 결과 확인 후 전송 | ✅ 구현 |
 
