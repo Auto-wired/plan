@@ -11,6 +11,7 @@ interface ConfirmDialogProps {
   description?: string
   actions: ConfirmAction[]
   cancelLabel?: string
+  /** 취소 버튼·오버레이 클릭 시만 호출. 액션 버튼(확정/범위 선택) 뒤에는 호출하지 않는다. */
   onClose: () => void
 }
 
@@ -38,7 +39,6 @@ export function ConfirmDialog({
               }`}
               onClick={() => {
                 action.onClick()
-                onClose()
               }}
             >
               {action.label}
