@@ -14,7 +14,7 @@
 
 ### 데스크톱
 
-- **헤더:** 로고 · 프로필(아바타·닉네임) · 로그아웃
+- **헤더:** 로고(호버 시 앱 버전 `v{semver} · {git sha}`) · 프로필(아바타·닉네임) · 로그아웃
 - **본문:** 좌측 달력 + 카테고리 필터 · 우측 AI 어시스턴트 패널
 
 ### 모바일
@@ -40,5 +40,7 @@
 | 파일 | 역할 |
 |------|------|
 | `frontend/src/App.tsx` | 레이아웃·탭·헤더 |
+| `frontend/src/lib/appVersion.ts` | 빌드 시 주입된 semver·Git SHA |
+| `frontend/vite.config.ts` | `__APP_VERSION__`·`__BUILD_SHA__` 주입 |
 | `frontend/src/components/auth/AuthGuard.tsx` | 세션 없으면 로그인 화면 |
 | `frontend/src/components/ErrorBoundary.tsx` | 에러 바운더리 |

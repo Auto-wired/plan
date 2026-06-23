@@ -58,7 +58,7 @@
 - 반복 인스턴스: **드롭 위치를 유지**한 채 범위 Dialog 표시 ([RECURRING_EVENTS.md](./RECURRING_EVENTS.md))
   - controlled `events` prop 때문에 `dragPreviewOverride`로 **드래그한 회차만** 드롭 좌표 유지 (다른 회차는 refetch까지 옛 위치)
   - **범위 선택 후에도** 드래그한 회차 preview 유지 → refetch로 나머지 회차 이동 → 서버 반영 완료 시 preview state만 정리
-  - **취소** 또는 **저장 실패** 시 `revert` + preview 해제
+  - **취소**(Dialog `취소`/오버레이) 또는 **저장 실패** 시에만 `revert` + preview 해제 — 범위 **선택** 시에는 `revert` 없음 ([CONFIRM_DIALOG.md](./CONFIRM_DIALOG.md))
 
 ### 7-2. 리사이즈 (Resize)
 
@@ -75,7 +75,7 @@ API 실패 시:
 1. 달력상 위치 **되돌림** (`revert`)
 2. 토스트 `error`, title: `일정 수정 실패`, description: `{실패 사유}`
 
-> 반복 인스턴스에서 Dialog **취소**도 DnD/리사이즈로 진입한 경우 동일하게 `revert`한다.
+> 반복 인스턴스에서 Dialog **취소**만 DnD/리사이즈 `revert` 대상이다. **해당/전체 선택**은 저장만 수행한다.
 
 ---
 

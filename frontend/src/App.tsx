@@ -7,6 +7,7 @@ import { ALL_EVENT_CATEGORIES, type EventCategory } from './lib/categories'
 import { AIAssistantPanel } from './components/ai/AIAssistantPanel'
 import { AIAssistantIcon } from './components/common/AIAssistantIcon'
 import { AppLogo } from './components/common/AppLogo'
+import { getAppVersionLabel } from './lib/appVersion'
 import { UserSettingsModal } from './components/settings/UserSettingsModal'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
@@ -74,7 +75,7 @@ function AppHeader() {
     <>
       <header className="app-header">
         <div className="app-header-left">
-          <AppLogo className="app-logo" />
+          <AppLogo className="app-logo" versionLabel={getAppVersionLabel()} />
           <div className="app-header-brand">
             <h1 className="app-title">Plan</h1>
             <p className="app-tagline">일정 관리</p>
