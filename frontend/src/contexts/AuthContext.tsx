@@ -1,5 +1,9 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
+import {
+  isDuplicateSignUpUser,
+  SIGNUP_ERROR_ALREADY_REGISTERED,
+} from '../lib/authValidation'
 import { supabase } from '../lib/supabase'
 
 interface SignUpOptions {
@@ -53,7 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const signUp = async (email: string, password: string, options: SignUpOptions) => {
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -63,6 +67,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
     })
     if (error) throw error
+
+    // auth.users는 클라이언트에서 조회 불가 → signUp 응답의 identities로 중복 판별 (Supabase 권장)
+    if (!data.user) {
+      throw new Error('SIGNUP_NO_USER')
+    }
+    if (isDuplicateSignUpUser(data.user)) {
+      throw new Error(SIGNUP_ERROR_ALREADY_REGISTERED)
+    }
   }
 
   const signOut = async () => {

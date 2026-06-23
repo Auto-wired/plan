@@ -321,12 +321,6 @@
   width: 100%;
 }
 
-.form-error {
-  margin: 0;
-  color: var(--color-danger);
-  font-size: 0.8125rem;
-}
-
 .modal-actions {
   display: flex;
   justify-content: space-between;

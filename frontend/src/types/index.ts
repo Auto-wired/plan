@@ -48,14 +48,6 @@ export interface RecurrenceException {
   id: string
   event_id: string
   original_start_at: string
-  type: 'modified' | 'deleted'
-  override_title: string | null
-  override_description: string | null
-  override_start_at: string | null
-  override_end_at: string | null
-  override_all_day: boolean | null
-  override_category: EventCategory | null
-  created_at: string
 }
 
 export interface EventFormData {
@@ -67,6 +59,9 @@ export interface EventFormData {
   category: EventCategory
   recurrence?: RecurrenceRule | null
 }
+
+/** Modal 저장/삭제가 즉시 완료됐는지, 반복 범위 선택으로 지연됐는지 */
+export type EventMutationResult = 'completed' | 'deferred'
 
 export interface ChatMessage {
   id: string
@@ -80,10 +75,42 @@ export interface AIAction {
   result: unknown
 }
 
+export type AIResultKind = 'create' | 'update' | 'delete' | 'query'
+
+export interface AIQueryInfo {
+  args: Record<string, unknown>
+  total: number
+  offset: number
+  limit: number
+  hasMore: boolean
+}
+
+export interface AIPendingAction {
+  tool: string
+  arguments: Record<string, unknown>
+}
+
+export interface AIPendingConfirmation {
+  kind: 'delete' | 'recurring-delete' | 'recurring-update' | 'ambiguous'
+  message: string
+  pendingAction: AIPendingAction
+  target?: {
+    title: string
+    start_at: string
+    end_at: string
+    all_day: boolean
+  } | null
+  /** recurring-delete: 유한 반복 마지막 1회차 → 「전체 삭제」만 */
+  lastOne?: boolean
+}
+
 export interface AIResponse {
   reply: string
   actions: AIAction[]
   events: CalendarEvent[]
+  resultKind?: AIResultKind | null
+  query?: AIQueryInfo | null
+  pendingConfirmation?: AIPendingConfirmation | null
 }
 
 export interface DateRange {

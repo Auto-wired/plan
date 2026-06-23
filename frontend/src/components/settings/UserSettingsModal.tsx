@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useToast } from '../../contexts/ToastContext'
 import { useProfileContext } from '../../contexts/ProfileContext'
 import { isValidNickname } from '../../lib/authValidation'
+import { PROFILE_TOAST } from '../../lib/profileToast'
 import type { ThemeMode } from '../../types'
 import './UserSettingsModal.css'
 
@@ -11,9 +13,9 @@ interface UserSettingsModalProps {
 
 export function UserSettingsModal({ email, onClose }: UserSettingsModalProps) {
   const { profile, uploadAvatar, updateProfile, setTheme } = useProfileContext()
+  const { showToast } = useToast()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [nicknameInput, setNicknameInput] = useState(profile?.nickname ?? '')
 
   const nickname = profile?.nickname ?? '사용자'
@@ -28,11 +30,11 @@ export function UserSettingsModal({ email, onClose }: UserSettingsModalProps) {
     if (!file) return
 
     setLoading(true)
-    setError(null)
     try {
       await uploadAvatar(file)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '이미지 업로드에 실패했습니다.')
+      const reason = err instanceof Error ? err.message : '이미지 업로드에 실패했습니다.'
+      showToast(PROFILE_TOAST.saveFailure(reason), { variant: 'error' })
     } finally {
       setLoading(false)
       e.target.value = ''
@@ -44,18 +46,18 @@ export function UserSettingsModal({ email, onClose }: UserSettingsModalProps) {
 
     const trimmed = nicknameInput.trim()
     if (!isValidNickname(trimmed)) {
-      setError('닉네임은 2~20자로 입력해주세요.')
+      showToast(PROFILE_TOAST.saveFailure('닉네임은 2~20자로 입력해주세요.'), { variant: 'error' })
       return
     }
 
     if (trimmed === profile?.nickname) return
 
     setLoading(true)
-    setError(null)
     try {
       await updateProfile({ nickname: trimmed })
     } catch (err) {
-      setError(err instanceof Error ? err.message : '닉네임 변경에 실패했습니다.')
+      const reason = err instanceof Error ? err.message : '닉네임 변경에 실패했습니다.'
+      showToast(PROFILE_TOAST.saveFailure(reason), { variant: 'error' })
     } finally {
       setLoading(false)
     }
@@ -63,11 +65,11 @@ export function UserSettingsModal({ email, onClose }: UserSettingsModalProps) {
 
   const handleThemeChange = async (theme: ThemeMode) => {
     setLoading(true)
-    setError(null)
     try {
       await setTheme(theme)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '테마 변경에 실패했습니다.')
+      const reason = err instanceof Error ? err.message : '테마 변경에 실패했습니다.'
+      showToast(PROFILE_TOAST.saveFailure(reason), { variant: 'error' })
     } finally {
       setLoading(false)
     }
@@ -153,8 +155,6 @@ export function UserSettingsModal({ email, onClose }: UserSettingsModalProps) {
             </button>
           </div>
         </section>
-
-        {error && <p className="settings-error">{error}</p>}
       </div>
     </div>
   )

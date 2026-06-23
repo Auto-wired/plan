@@ -1,5 +1,6 @@
-import { useCallback, useImperativeHandle, useMemo, useState, forwardRef } from 'react'
-import { matchesCategoryFilter, type EventCategory } from '../../lib/categories'
+import { useCallback, useImperativeHandle, useLayoutEffect, useMemo, useState, forwardRef } from 'react'
+import type { EventInput } from '@fullcalendar/core'
+import { matchesCategoryFilter, DEFAULT_EVENT_CATEGORY, EVENT_CATEGORIES, type EventCategory } from '../../lib/categories'
 import FullCalendar from '@fullcalendar/react'
 import dayGridPlugin from '@fullcalendar/daygrid'
 import timeGridPlugin from '@fullcalendar/timegrid'
@@ -10,18 +11,28 @@ import type {
   EventClickArg,
   EventDropArg,
   DatesSetArg,
+  EventContentArg,
 } from '@fullcalendar/core'
 import type { EventResizeDoneArg } from '@fullcalendar/interaction'
 import { useAuth } from '../../hooks/useAuth'
 import { useEvents } from '../../hooks/useEvents'
+import { useToast } from '../../contexts/ToastContext'
 import {
   calendarDateToUtcIso,
   calendarRangeToUtcIso,
+  getCalendarNow,
+  normalizeDbTimestamp,
+  toFullCalendarAllDayEnd,
+  utcToFullCalendarValue,
 } from '../../lib/datetime'
-import type { CalendarEvent, DateRange, EventFormData, RecurrenceScope } from '../../types'
+import { mapEventError } from '../../lib/eventValidation'
+import { EVENT_TOAST } from '../../lib/eventToast'
+import type { CalendarEvent, DateRange, EventFormData, EventMutationResult, RecurrenceScope } from '../../types'
 import { eventToRecurrenceRule, recurrenceRuleChanged } from '../../lib/eventMapper'
+import { getRemainingRecurringOccurrences } from '../../lib/recurrenceActions'
+import { ConfirmDialog } from '../common/ConfirmDialog'
 import { EventModal } from './EventModal'
-import { RecurrenceScopeDialog, type RecurrenceScopeChoice } from './RecurrenceScopeDialog'
+import { renderCalendarEventContent } from './CalendarEventContent'
 import './EventCalendar.css'
 
 interface EventCalendarProps {
@@ -33,15 +44,142 @@ export interface EventCalendarHandle {
 }
 
 interface PendingRecurringAction {
-  mode: 'edit' | 'delete'
   master: CalendarEvent
   originalStartAt: string
-  form?: EventFormData
+  form: EventFormData
+  /** DnD/리사이즈로 진입한 경우 취소·저장 실패 시 달력 위치 복구 */
+  revert?: () => void
+}
+
+interface PendingRecurringDelete {
+  master: CalendarEvent
+  originalStartAt: string
+  /** 유한 반복의 마지막 1회차 → 「전체 삭제」만 제공 */
+  lastOne: boolean
+}
+
+/** DnD/리사이즈한 회차만 controlled events 원위치 리셋 방지 (저장·refetch 완료까지 유지) */
+interface DragPreviewOverride {
+  instanceId: string
+  start_at: string
+  end_at: string
+  all_day: boolean
+  /** 「해당 일정만」 저장 중 instanceId가 목록에서 빠질 때 드롭 위치 유지 */
+  fallbackEvent: EventInput
+}
+
+function buildPreviewEventFromOverride(preview: DragPreviewOverride): EventInput {
+  const { instanceId, start_at, end_at, all_day, fallbackEvent } = preview
+  return {
+    ...fallbackEvent,
+    id: instanceId,
+    start: utcToFullCalendarValue(start_at, all_day),
+    end: all_day
+      ? toFullCalendarAllDayEnd(start_at, end_at)
+      : utcToFullCalendarValue(end_at, false),
+    allDay: all_day,
+    extendedProps: {
+      ...(fallbackEvent.extendedProps as Record<string, unknown>),
+      start_at: normalizeDbTimestamp(start_at),
+      end_at: normalizeDbTimestamp(end_at),
+    },
+  }
+}
+
+function snapshotFcEventForPreview(
+  event: {
+    id: string
+    title: string
+    start: Date | null
+    end: Date | null
+    allDay: boolean
+    backgroundColor?: string
+    borderColor?: string
+    textColor?: string
+    extendedProps: Record<string, unknown>
+  },
+  start_at: string,
+  end_at: string,
+): EventInput {
+  return {
+    id: event.id,
+    title: event.title,
+    start: event.start ?? undefined,
+    end: event.end ?? undefined,
+    allDay: event.allDay,
+    backgroundColor: event.backgroundColor,
+    borderColor: event.borderColor,
+    textColor: event.textColor,
+    extendedProps: {
+      ...event.extendedProps,
+      start_at: normalizeDbTimestamp(start_at),
+      end_at: normalizeDbTimestamp(end_at),
+    },
+  }
+}
+
+function fcEventTimesMatchPreview(event: EventInput, preview: DragPreviewOverride): boolean {
+  const props = event.extendedProps as Record<string, unknown> | undefined
+  const start_at = normalizeDbTimestamp(String(props?.start_at ?? ''))
+  const end_at = normalizeDbTimestamp(String(props?.end_at ?? ''))
+  return (
+    start_at === normalizeDbTimestamp(preview.start_at) &&
+    end_at === normalizeDbTimestamp(preview.end_at) &&
+    Boolean(event.allDay) === preview.all_day
+  )
+}
+
+function applyDragPreview(
+  events: EventInput[],
+  preview: DragPreviewOverride,
+): EventInput[] {
+  const { instanceId, start_at, end_at, all_day } = preview
+  const target = events.find((event) => event.id === instanceId)
+
+  if (target && fcEventTimesMatchPreview(target, preview)) {
+    return events
+  }
+
+  if (!target) {
+    if (events.some((event) => fcEventTimesMatchPreview(event, preview))) {
+      return events
+    }
+    return [...events, buildPreviewEventFromOverride(preview)]
+  }
+
+  return events.map((fcEvent) => {
+    if (fcEvent.id !== instanceId) return fcEvent
+    return {
+      ...fcEvent,
+      start: utcToFullCalendarValue(start_at, all_day),
+      end: all_day
+        ? toFullCalendarAllDayEnd(start_at, end_at)
+        : utcToFullCalendarValue(end_at, false),
+      allDay: all_day,
+      extendedProps: {
+        ...(fcEvent.extendedProps as Record<string, unknown>),
+        start_at: normalizeDbTimestamp(start_at),
+        end_at: normalizeDbTimestamp(end_at),
+      },
+    }
+  })
+}
+
+function dragPreviewCommitted(
+  events: EventInput[],
+  preview: DragPreviewOverride,
+): boolean {
+  const target = events.find((event) => event.id === preview.instanceId)
+  if (target && fcEventTimesMatchPreview(target, preview)) return true
+  return events.some(
+    (event) => event.id !== preview.instanceId && fcEventTimesMatchPreview(event, preview),
+  )
 }
 
 export const EventCalendar = forwardRef<EventCalendarHandle, EventCalendarProps>(
   function EventCalendar({ selectedCategories = [] }, ref) {
   const { user } = useAuth()
+  const { showToast } = useToast()
   const [dateRange, setDateRange] = useState<DateRange | null>(null)
   const {
     calendarEvents,
@@ -75,6 +213,26 @@ export const EventCalendar = forwardRef<EventCalendarHandle, EventCalendarProps>
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [pendingRecurringAction, setPendingRecurringAction] =
     useState<PendingRecurringAction | null>(null)
+  const [pendingRecurringDelete, setPendingRecurringDelete] =
+    useState<PendingRecurringDelete | null>(null)
+  const [dragPreviewOverride, setDragPreviewOverride] =
+    useState<DragPreviewOverride | null>(null)
+
+  const clearDragPreview = useCallback(() => {
+    setDragPreviewOverride(null)
+  }, [])
+
+  const displayCalendarEvents = useMemo(() => {
+    if (!dragPreviewOverride) return filteredCalendarEvents
+    return applyDragPreview(filteredCalendarEvents, dragPreviewOverride)
+  }, [filteredCalendarEvents, dragPreviewOverride])
+
+  useLayoutEffect(() => {
+    if (!dragPreviewOverride) return
+    if (dragPreviewCommitted(filteredCalendarEvents, dragPreviewOverride)) {
+      clearDragPreview()
+    }
+  }, [filteredCalendarEvents, dragPreviewOverride, clearDragPreview])
 
   const handleDatesSet = useCallback((arg: DatesSetArg) => {
     setDateRange({ start: arg.start, end: arg.end })
@@ -178,33 +336,52 @@ export const EventCalendar = forwardRef<EventCalendarHandle, EventCalendarProps>
     [openEventForEdit],
   )
 
+  const closeModal = useCallback(() => {
+    setIsModalOpen(false)
+    setSelectedEvent(null)
+    setSelectedOriginalStartAt(null)
+    setInitialRange(null)
+  }, [])
+
+  const executeRecurringDelete = useCallback(
+    async (scope: RecurrenceScope) => {
+      if (!pendingRecurringDelete) return
+
+      const { master, originalStartAt } = pendingRecurringDelete
+
+      try {
+        await deleteRecurringEventByScope(master, originalStartAt, scope)
+        showToast(EVENT_TOAST.deleteSuccess, { variant: 'success' })
+        closeModal()
+      } catch (err) {
+        const reason = mapEventError(err instanceof Error ? err.message : '')
+        showToast(EVENT_TOAST.deleteFailure(reason), { variant: 'error' })
+      } finally {
+        setPendingRecurringDelete(null)
+      }
+    },
+    [closeModal, deleteRecurringEventByScope, pendingRecurringDelete, showToast],
+  )
+
   const applyScope = useCallback(
-    async (scope: RecurrenceScopeChoice) => {
+    async (scope: RecurrenceScope) => {
       if (!pendingRecurringAction) return
 
-      const { mode, master, originalStartAt, form } = pendingRecurringAction
-      const recurrenceScope = scope as RecurrenceScope
-
-      if (mode === 'delete') {
-        const confirmed = confirm(
-          recurrenceScope === 'all'
-            ? '전체 반복 일정을 삭제하시겠습니까?'
-            : '이 일정을 삭제하시겠습니까?',
-        )
-        if (!confirmed) {
-          setPendingRecurringAction(null)
-          return
-        }
-        await deleteRecurringEventByScope(master, originalStartAt, recurrenceScope)
-        closeModal()
-      } else if (form) {
-        await updateRecurringEvent(master, originalStartAt, recurrenceScope, form)
-        closeModal()
-      }
-
+      const { master, originalStartAt, form, revert } = pendingRecurringAction
       setPendingRecurringAction(null)
+
+      try {
+        await updateRecurringEvent(master, originalStartAt, scope, form)
+        showToast(EVENT_TOAST.updateSuccess, { variant: 'success' })
+        closeModal()
+      } catch (err) {
+        revert?.()
+        clearDragPreview()
+        const reason = mapEventError(err instanceof Error ? err.message : '')
+        showToast(EVENT_TOAST.updateFailure(reason), { variant: 'error' })
+      }
     },
-    [deleteRecurringEventByScope, pendingRecurringAction, updateRecurringEvent],
+    [clearDragPreview, closeModal, pendingRecurringAction, showToast, updateRecurringEvent],
   )
 
   const handleEventDrop = useCallback(
@@ -225,9 +402,15 @@ export const EventCalendar = forwardRef<EventCalendarHandle, EventCalendarProps>
 
       try {
         if (isRecurringInstance) {
+          setDragPreviewOverride({
+            instanceId: event.id,
+            start_at: normalizeDbTimestamp(start_at),
+            end_at: normalizeDbTimestamp(end_at),
+            all_day: event.allDay,
+            fallbackEvent: snapshotFcEventForPreview(event, start_at, end_at),
+          })
           const master = await fetchMasterEvent(masterId)
           setPendingRecurringAction({
-            mode: 'edit',
             master,
             originalStartAt,
             form: {
@@ -239,8 +422,8 @@ export const EventCalendar = forwardRef<EventCalendarHandle, EventCalendarProps>
               category: (event.extendedProps.category as CalendarEvent['category']) ?? 'work',
               recurrence: eventToRecurrenceRule(master),
             },
+            revert: () => dropInfo.revert(),
           })
-          dropInfo.revert()
           return
         }
 
@@ -249,11 +432,14 @@ export const EventCalendar = forwardRef<EventCalendarHandle, EventCalendarProps>
           end_at,
           all_day: event.allDay,
         })
-      } catch {
+      } catch (err) {
+        clearDragPreview()
         dropInfo.revert()
+        const reason = mapEventError(err instanceof Error ? err.message : '')
+        showToast(EVENT_TOAST.updateFailure(reason), { variant: 'error' })
       }
     },
-    [fetchMasterEvent, updateEvent],
+    [clearDragPreview, fetchMasterEvent, showToast, updateEvent],
   )
 
   const handleEventResize = useCallback(
@@ -274,9 +460,15 @@ export const EventCalendar = forwardRef<EventCalendarHandle, EventCalendarProps>
 
       try {
         if (isRecurringInstance) {
+          setDragPreviewOverride({
+            instanceId: event.id,
+            start_at: normalizeDbTimestamp(start_at),
+            end_at: normalizeDbTimestamp(end_at),
+            all_day: event.allDay,
+            fallbackEvent: snapshotFcEventForPreview(event, start_at, end_at),
+          })
           const master = await fetchMasterEvent(masterId)
           setPendingRecurringAction({
-            mode: 'edit',
             master,
             originalStartAt,
             form: {
@@ -288,8 +480,8 @@ export const EventCalendar = forwardRef<EventCalendarHandle, EventCalendarProps>
               category: (event.extendedProps.category as CalendarEvent['category']) ?? 'work',
               recurrence: eventToRecurrenceRule(master),
             },
+            revert: () => resizeInfo.revert(),
           })
-          resizeInfo.revert()
           return
         }
 
@@ -298,33 +490,35 @@ export const EventCalendar = forwardRef<EventCalendarHandle, EventCalendarProps>
           end_at,
           all_day: event.allDay,
         })
-      } catch {
+      } catch (err) {
+        clearDragPreview()
         resizeInfo.revert()
+        const reason = mapEventError(err instanceof Error ? err.message : '')
+        showToast(EVENT_TOAST.updateFailure(reason), { variant: 'error' })
       }
     },
-    [fetchMasterEvent, updateEvent],
+    [clearDragPreview, fetchMasterEvent, showToast, updateEvent],
   )
 
   const handleSave = useCallback(
-    async (form: EventFormData, eventId?: string) => {
-      if (!user) return
+    async (form: EventFormData, eventId?: string): Promise<EventMutationResult> => {
+      if (!user) return 'completed'
 
       if (eventId && selectedOriginalStartAt) {
         const master = await fetchMasterEvent(eventId)
         if (master.recurrence_freq) {
           if (recurrenceRuleChanged(master, form)) {
             await updateRecurringEvent(master, selectedOriginalStartAt, 'all', form)
-            return
+            return 'completed'
           }
 
           setPendingRecurringAction({
-            mode: 'edit',
             master,
             originalStartAt: selectedOriginalStartAt,
             form,
           })
           setIsModalOpen(false)
-          return
+          return 'deferred'
         }
       }
 
@@ -333,39 +527,51 @@ export const EventCalendar = forwardRef<EventCalendarHandle, EventCalendarProps>
       } else {
         await createEvent(form, user.id)
       }
+      return 'completed'
     },
     [user, selectedOriginalStartAt, fetchMasterEvent, updateEvent, updateRecurringEvent, createEvent],
   )
 
   const handleDelete = useCallback(
-    async (eventId: string) => {
+    async (eventId: string): Promise<EventMutationResult> => {
       if (selectedOriginalStartAt) {
         const master = await fetchMasterEvent(eventId)
         if (master.recurrence_freq) {
-          setPendingRecurringAction({
-            mode: 'delete',
+          const remaining = await getRemainingRecurringOccurrences(master)
+          setPendingRecurringDelete({
             master,
             originalStartAt: selectedOriginalStartAt,
+            lastOne: remaining === 1,
           })
           setIsModalOpen(false)
-          return
+          return 'deferred'
         }
       }
 
       await deleteEvent(eventId)
+      return 'completed'
     },
     [deleteEvent, fetchMasterEvent, selectedOriginalStartAt],
   )
 
-  const closeModal = () => {
-    setIsModalOpen(false)
-    setSelectedEvent(null)
-    setSelectedOriginalStartAt(null)
-    setInitialRange(null)
-  }
+  const categoryEventStyles = useMemo(
+    () =>
+      EVENT_CATEGORIES.map(
+        (cat) =>
+          `.calendar-container .fc-event-cat-${cat.value}{--fc-event-bg-color:${cat.color};--fc-event-border-color:${cat.color};}`,
+      ).join(''),
+    [],
+  )
+
+  const handleEventClassNames = useCallback((arg: EventContentArg) => {
+    const category =
+      (arg.event.extendedProps.category as EventCategory | undefined) ?? DEFAULT_EVENT_CATEGORY
+    return [`fc-event-cat-${category}`]
+  }, [])
 
   return (
     <div className="calendar-container">
+      <style>{categoryEventStyles}</style>
       {isLoading && <div className="calendar-loading">일정 불러오는 중...</div>}
       <FullCalendar
         plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin, listPlugin]}
@@ -377,15 +583,19 @@ export const EventCalendar = forwardRef<EventCalendarHandle, EventCalendarProps>
         }}
         locale="ko"
         timeZone="UTC"
+        eventDisplay="block"
+        now={getCalendarNow()}
         editable
         selectable
         selectMirror
         dayMaxEvents
         weekends
-        events={filteredCalendarEvents}
+        events={displayCalendarEvents}
         datesSet={handleDatesSet}
         select={handleSelect}
         eventClick={handleEventClick}
+        eventContent={renderCalendarEventContent}
+        eventClassNames={handleEventClassNames}
         eventDrop={handleEventDrop}
         eventResize={handleEventResize}
         height="100%"
@@ -403,15 +613,56 @@ export const EventCalendar = forwardRef<EventCalendarHandle, EventCalendarProps>
       )}
 
       {pendingRecurringAction && (
-        <RecurrenceScopeDialog
-          mode={pendingRecurringAction.mode}
-          onSelect={(scope) => void applyScope(scope)}
+        <ConfirmDialog
+          title="반복 일정을 어떻게 수정할까요?"
+          actions={[
+            { label: '해당 일정만', onClick: () => void applyScope('this') },
+            { label: '전체 일정', onClick: () => void applyScope('all') },
+          ]}
           onClose={() => {
+            pendingRecurringAction.revert?.()
+            clearDragPreview()
             setPendingRecurringAction(null)
             if (!isModalOpen) {
               setSelectedEvent(null)
               setSelectedOriginalStartAt(null)
             }
+          }}
+        />
+      )}
+
+      {pendingRecurringDelete && (
+        <ConfirmDialog
+          title={
+            pendingRecurringDelete.lastOne
+              ? '전체 반복 일정을 삭제하시겠습니까?'
+              : '반복 일정을 어떻게 삭제할까요?'
+          }
+          actions={
+            pendingRecurringDelete.lastOne
+              ? [
+                  {
+                    label: '전체 삭제',
+                    variant: 'danger',
+                    onClick: () => void executeRecurringDelete('all'),
+                  },
+                ]
+              : [
+                  {
+                    label: '해당 일정만',
+                    variant: 'danger',
+                    onClick: () => void executeRecurringDelete('this'),
+                  },
+                  {
+                    label: '전체 일정',
+                    variant: 'danger',
+                    onClick: () => void executeRecurringDelete('all'),
+                  },
+                ]
+          }
+          onClose={() => {
+            setPendingRecurringDelete(null)
+            if (!isModalOpen) closeModal()
           }}
         />
       )}

@@ -2,48 +2,121 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { getCategoryColor } from '../../lib/categories'
 import { formatEventScheduleRange } from '../../lib/datetime'
 import { useAIChat } from '../../hooks/useAIChat'
-import type { CalendarEvent } from '../../types'
+import type { AIPendingConfirmation, AIResultKind, CalendarEvent } from '../../types'
 import { AIAssistantIcon } from '../common/AIAssistantIcon'
+import { ConfirmDialog, type ConfirmAction } from '../common/ConfirmDialog'
 import { ChatMessage } from './ChatMessage'
 import { VoiceButton } from './VoiceButton'
 import './AIAssistantPanel.css'
+
+function buildConfirmActions(
+  pc: AIPendingConfirmation,
+  confirm: (scope?: 'this' | 'all') => void,
+): ConfirmAction[] {
+  switch (pc.kind) {
+    case 'delete':
+      return [{ label: '삭제', variant: 'danger', onClick: () => confirm() }]
+    case 'recurring-delete':
+      return pc.lastOne
+        ? [{ label: '전체 삭제', variant: 'danger', onClick: () => confirm('all') }]
+        : [
+            { label: '해당 일정만', variant: 'danger', onClick: () => confirm('this') },
+            { label: '전체 일정', variant: 'danger', onClick: () => confirm('all') },
+          ]
+    case 'recurring-update':
+      return [
+        { label: '해당 일정만', onClick: () => confirm('this') },
+        { label: '전체 일정', onClick: () => confirm('all') },
+      ]
+    default:
+      return []
+  }
+}
 
 interface AIAssistantPanelProps {
   onEventClick?: (event: CalendarEvent) => void
 }
 
+const RESULT_LABEL: Record<AIResultKind, string> = {
+  query: '조회된 일정',
+  create: '추가된 일정',
+  update: '수정된 일정',
+  delete: '삭제된 일정',
+}
+
 function EventResultList({
   events,
+  resultKind,
+  hasMore,
+  isLoadingMore,
+  onLoadMore,
   onEventClick,
 }: {
   events: CalendarEvent[]
+  resultKind: AIResultKind | null
+  hasMore: boolean
+  isLoadingMore: boolean
+  onLoadMore: () => void
   onEventClick?: (event: CalendarEvent) => void
 }) {
   if (!events.length) return null
 
+  const label = RESULT_LABEL[resultKind ?? 'query']
+  const isDeleted = resultKind === 'delete'
+
   return (
     <div className="ai-event-results">
-      <p className="ai-event-results-title">조회된 일정 {events.length}건</p>
+      <p className="ai-event-results-title">
+        {label} {events.length}건
+      </p>
       <ul>
-        {events.map((event) => (
-          <li key={event.id}>
-            <button
-              type="button"
-              className="ai-event-item"
-              onClick={() => onEventClick?.(event)}
-            >
-              <span
-                className="ai-event-dot"
-                style={{ background: getCategoryColor(event.category) }}
-              />
-              <div className="ai-event-info">
-                <strong>{event.title}</strong>
-                <span>{formatEventScheduleRange(event.start_at, event.end_at, event.all_day)}</span>
-              </div>
-            </button>
-          </li>
-        ))}
+        {events.map((event, index) => {
+          const dot = (
+            <span
+              className="ai-event-dot"
+              style={{ background: getCategoryColor(event.category) }}
+            />
+          )
+          const info = (
+            <div className="ai-event-info">
+              <strong>{event.title}</strong>
+              <span>
+                {formatEventScheduleRange(event.start_at, event.end_at, event.all_day)}
+              </span>
+            </div>
+          )
+
+          return (
+            <li key={`${event.id}-${event.start_at}-${index}`}>
+              {isDeleted ? (
+                <div className="ai-event-item ai-event-item--deleted">
+                  {dot}
+                  {info}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="ai-event-item"
+                  onClick={() => onEventClick?.(event)}
+                >
+                  {dot}
+                  {info}
+                </button>
+              )}
+            </li>
+          )
+        })}
       </ul>
+      {resultKind === 'query' && hasMore && (
+        <button
+          type="button"
+          className="ai-event-more-btn"
+          onClick={onLoadMore}
+          disabled={isLoadingMore}
+        >
+          {isLoadingMore ? '불러오는 중…' : '더보기'}
+        </button>
+      )}
     </div>
   )
 }
@@ -55,9 +128,23 @@ const SUGGESTIONS = [
 ]
 
 export function AIAssistantPanel({ onEventClick }: AIAssistantPanelProps) {
-  const { messages, isLoading, lastEvents, sendMessage, clearChat } = useAIChat()
+  const {
+    messages,
+    isLoading,
+    isLoadingMore,
+    lastEvents,
+    lastResultKind,
+    hasMore,
+    pendingConfirmation,
+    sendMessage,
+    loadMore,
+    confirmPending,
+    rejectPending,
+    clearChat,
+  } = useAIChat()
   const [input, setInput] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -71,8 +158,10 @@ export function AIAssistantPanel({ onEventClick }: AIAssistantPanelProps) {
     await sendMessage(text)
   }
 
-  const handleVoiceTranscript = async (text: string) => {
-    await sendMessage(text)
+  // 음성 인식 결과는 바로 전송하지 않고 입력창에 채워 사용자가 확인 후 전송
+  const handleVoiceTranscript = (text: string) => {
+    setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))
+    inputRef.current?.focus()
   }
 
   const handleSuggestion = async (text: string) => {
@@ -96,7 +185,14 @@ export function AIAssistantPanel({ onEventClick }: AIAssistantPanelProps) {
         )}
       </div>
 
-      <EventResultList events={lastEvents} onEventClick={onEventClick} />
+      <EventResultList
+        events={lastEvents}
+        resultKind={lastResultKind}
+        hasMore={hasMore}
+        isLoadingMore={isLoadingMore}
+        onLoadMore={loadMore}
+        onEventClick={onEventClick}
+      />
 
       <div className="ai-messages">
         {messages.length === 0 && (
@@ -139,12 +235,35 @@ export function AIAssistantPanel({ onEventClick }: AIAssistantPanelProps) {
           </div>
         )}
 
+        {pendingConfirmation?.kind === 'ambiguous' && !isLoading && (
+          <div className="ai-confirm-inline">
+            <button
+              type="button"
+              className="ai-confirm-yes"
+              onClick={() => void confirmPending()}
+            >
+              맞다
+            </button>
+            <button
+              type="button"
+              className="ai-confirm-no"
+              onClick={() => {
+                rejectPending()
+                inputRef.current?.focus()
+              }}
+            >
+              아니다
+            </button>
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
       <form className="ai-input-form" onSubmit={handleSubmit}>
         <VoiceButton onTranscript={handleVoiceTranscript} disabled={isLoading} />
         <input
+          ref={inputRef}
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -159,6 +278,16 @@ export function AIAssistantPanel({ onEventClick }: AIAssistantPanelProps) {
           보내기
         </button>
       </form>
+
+      {pendingConfirmation && pendingConfirmation.kind !== 'ambiguous' && (
+        <ConfirmDialog
+          title={pendingConfirmation.message}
+          actions={buildConfirmActions(pendingConfirmation, (scope) =>
+            void confirmPending(scope),
+          )}
+          onClose={() => rejectPending()}
+        />
+      )}
     </div>
   )
 }

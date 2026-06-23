@@ -30,8 +30,8 @@ export type Database = {
       }
       event_recurrence_exceptions: {
         Row: RecurrenceException
-        Insert: Omit<RecurrenceException, 'id' | 'created_at'>
-        Update: Partial<Omit<RecurrenceException, 'id' | 'event_id' | 'created_at'>>
+        Insert: Omit<RecurrenceException, 'id'>
+        Update: Partial<Omit<RecurrenceException, 'id' | 'event_id'>>
       }
     }
   }

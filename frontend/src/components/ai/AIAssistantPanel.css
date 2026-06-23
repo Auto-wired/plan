@@ -292,6 +292,80 @@
   font-size: 0.75rem;
 }
 
+/* 삭제된 일정: 비클릭(정적) 표시 */
+.ai-event-item--deleted {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.ai-event-item--deleted .ai-event-info strong {
+  text-decoration: line-through;
+}
+
+.ai-event-more-btn {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.ai-event-more-btn:hover:not(:disabled) {
+  background: var(--color-primary-light);
+  border-color: var(--color-primary-muted);
+  color: var(--color-primary);
+}
+
+.ai-event-more-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 모호 요청 되묻기 (맞다/아니다) */
+.ai-confirm-inline {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0 12px 36px;
+}
+
+.ai-confirm-yes,
+.ai-confirm-no {
+  padding: 8px 18px;
+  border-radius: var(--radius-full);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity var(--transition), background var(--transition);
+}
+
+.ai-confirm-yes {
+  border: none;
+  background: var(--gradient-btn);
+  color: #fff;
+}
+
+.ai-confirm-yes:hover {
+  opacity: 0.9;
+}
+
+.ai-confirm-no {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+}
+
+.ai-confirm-no:hover {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
 /* Input */
 .ai-input-form {
   display: flex;

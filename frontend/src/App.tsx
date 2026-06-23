@@ -11,7 +11,8 @@ import { UserSettingsModal } from './components/settings/UserSettingsModal'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ProfileProvider, useProfileContext } from './contexts/ProfileContext'
-import { ToastProvider } from './contexts/ToastContext'
+import { ToastProvider, useToast } from './contexts/ToastContext'
+import { AUTH_TOAST } from './lib/authToast'
 import { useEventsRealtime } from './hooks/useEventsRealtime'
 import type { CalendarEvent } from './types'
 import './App.css'
@@ -50,6 +51,7 @@ function CalendarIcon({ active }: { active?: boolean }) {
 function AppHeader() {
   const { user, signOut } = useAuth()
   const { profile } = useProfileContext()
+  const { showToast } = useToast()
   const [signingOut, setSigningOut] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
@@ -57,6 +59,9 @@ function AppHeader() {
     setSigningOut(true)
     try {
       await signOut()
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : '로그아웃에 실패했습니다. 잠시 후 다시 시도해주세요.'
+      showToast(AUTH_TOAST.logoutFailure(reason), { variant: 'error' })
     } finally {
       setSigningOut(false)
     }

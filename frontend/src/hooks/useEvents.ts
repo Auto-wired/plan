@@ -151,7 +151,8 @@ export function useEvents(range: DateRange | null) {
     ) => {
       const prepared = prepareEventFormForSave(form)
       await editRecurringEvent(master, originalStartAt, scope, prepared)
-      await queryClient.invalidateQueries({ queryKey: ['events'] })
+      await queryClient.cancelQueries({ queryKey: ['events'] })
+      await queryClient.refetchQueries({ queryKey: ['events'] })
     },
     [queryClient],
   )

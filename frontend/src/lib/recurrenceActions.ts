@@ -1,5 +1,10 @@
-import { parseWallClockDate, recurrenceUntilLocalToUtc } from './datetime'
+import {
+  normalizeDbTimestamp,
+  parseWallClockDate,
+  recurrenceUntilLocalToUtc,
+} from './datetime'
 import { recurrenceRuleChanged } from './eventMapper'
+import { countRemainingOccurrences, isFiniteRecurringSeries } from './recurrence'
 import { supabase } from './supabase'
 import type {
   CalendarEvent,
@@ -40,7 +45,6 @@ async function excludeOccurrence(
     {
       event_id: eventId,
       original_start_at: originalStartAt,
-      type: 'deleted',
     },
     { onConflict: 'event_id,original_start_at' },
   )
@@ -71,18 +75,19 @@ async function migrateRecurrenceExceptions(
     const { error: insertError } = await supabase.from('event_recurrence_exceptions').insert({
       event_id: ex.event_id,
       original_start_at: shiftTimestamp(ex.original_start_at, deltaMs),
-      type: ex.type,
-      override_title: ex.override_title,
-      override_description: ex.override_description,
-      override_start_at: ex.override_start_at
-        ? shiftTimestamp(ex.override_start_at, deltaMs)
-        : null,
-      override_end_at: ex.override_end_at ? shiftTimestamp(ex.override_end_at, deltaMs) : null,
-      override_all_day: ex.override_all_day,
-      override_category: ex.override_category,
     })
     if (insertError) throw insertError
   }
+}
+
+export async function getRemainingRecurringOccurrences(
+  master: CalendarEvent,
+): Promise<number | null> {
+  if (!master.recurrence_freq) return 0
+  if (!isFiniteRecurringSeries(master)) return null
+
+  const exceptions = await fetchRecurrenceExceptions([master.id])
+  return countRemainingOccurrences(master, exceptions)
 }
 
 export async function deleteRecurringEvent(
@@ -97,6 +102,24 @@ export async function deleteRecurringEvent(
   }
 
   // scope === 'this': 이 occurrence만 반복에서 제외
+  // §5-7: 유한 반복에서 남은 회차가 1개뿐이면 전체 삭제로 처리
+  if (master.recurrence_freq && isFiniteRecurringSeries(master)) {
+    const exceptions = await fetchRecurrenceExceptions([master.id])
+    const normalizedTarget = normalizeDbTimestamp(originalStartAt)
+    const alreadyExcluded = exceptions.some(
+      (ex) => normalizeDbTimestamp(ex.original_start_at) === normalizedTarget,
+    )
+
+    if (!alreadyExcluded) {
+      const remaining = countRemainingOccurrences(master, exceptions)
+      if (remaining === 1) {
+        await wipeRecurrenceExceptions(master.id)
+        await supabase.from('events').delete().eq('id', master.id)
+        return
+      }
+    }
+  }
+
   await excludeOccurrence(master.id, originalStartAt)
 }
 

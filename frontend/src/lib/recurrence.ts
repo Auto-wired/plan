@@ -44,23 +44,6 @@ function buildInstance(
   }
 }
 
-function applyException(
-  instance: ExpandedCalendarEvent,
-  exception: RecurrenceException,
-): ExpandedCalendarEvent | null {
-  if (exception.type === 'deleted') return null
-
-  return {
-    ...instance,
-    title: exception.override_title ?? instance.title,
-    description: exception.override_description ?? instance.description,
-    start_at: exception.override_start_at ?? instance.start_at,
-    end_at: exception.override_end_at ?? instance.end_at,
-    all_day: exception.override_all_day ?? instance.all_day,
-    category: exception.override_category ?? instance.category,
-  }
-}
-
 export function expandRecurringEvent(
   master: CalendarEvent,
   range: DateRange,
@@ -77,9 +60,7 @@ export function expandRecurringEvent(
   const maxCount = master.recurrence_count ?? Infinity
   let count = 0
   const interval = master.recurrence_interval || 1
-  const exceptionMap = new Map(
-    exceptions.map((ex) => [normalizeDbTimestamp(ex.original_start_at), ex]),
-  )
+  const excluded = new Set(exceptions.map((ex) => normalizeDbTimestamp(ex.original_start_at)))
 
   while (count < maxCount) {
     if (until && isAfter(current, until)) break
@@ -91,9 +72,9 @@ export function expandRecurringEvent(
 
     if (!isBefore(instanceEnd, rangeStart)) {
       const base = buildInstance(master, current)
-      const exception = exceptionMap.get(base.originalStartAt)
-      const resolved = exception ? applyException(base, exception) : base
-      if (resolved) instances.push(resolved)
+      if (!excluded.has(base.originalStartAt)) {
+        instances.push(base)
+      }
     }
 
     count += 1
@@ -136,6 +117,42 @@ export function expandEventsForRange(
 
 export function isRecurringMaster(event: CalendarEvent): boolean {
   return !!event.recurrence_freq
+}
+
+export function isFiniteRecurringSeries(master: CalendarEvent): boolean {
+  return master.recurrence_count !== null || master.recurrence_until !== null
+}
+
+/** 달력 range 없이 유한 반복의 남은 표시 회차 수 (제외 목록 반영) */
+export function countRemainingOccurrences(
+  master: CalendarEvent,
+  exceptions: RecurrenceException[] = [],
+): number {
+  if (!master.recurrence_freq) return 0
+
+  const excluded = new Set(exceptions.map((ex) => normalizeDbTimestamp(ex.original_start_at)))
+  const until = master.recurrence_until ? parseWallClockDate(master.recurrence_until) : null
+  const maxCount = master.recurrence_count ?? Infinity
+  const interval = master.recurrence_interval || 1
+
+  const masterStart = parseWallClockDate(master.start_at)
+  let current = masterStart
+  let count = 0
+  let remaining = 0
+
+  while (count < maxCount) {
+    if (until && isAfter(current, until)) break
+
+    const originalStartAt = calendarDateToUtcIso(current)
+    if (!excluded.has(originalStartAt)) {
+      remaining += 1
+    }
+
+    count += 1
+    current = advanceDate(masterStart, master.recurrence_freq, interval * count)
+  }
+
+  return remaining
 }
 
 export function overlapsRange(event: CalendarEvent, range: DateRange): boolean {

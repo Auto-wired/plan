@@ -1,9 +1,12 @@
 import { useState, type FormEvent } from 'react'
 import { useAuth } from '../../hooks/useAuth'
 import { useToast } from '../../contexts/ToastContext'
+import { AUTH_TOAST } from '../../lib/authToast'
 import {
+  mapLoginError,
   mapSignUpError,
-  validateSignUpStep,
+  validateLoginForm,
+  validateSignUpForm,
 } from '../../lib/authValidation'
 import { AppLogo } from '../common/AppLogo'
 import './Auth.css'
@@ -16,45 +19,54 @@ export function LoginForm() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [nickname, setNickname] = useState('')
   const [isSignUp, setIsSignUp] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
+
+  const switchToLogin = () => {
+    setIsSignUp(false)
+    setPassword('')
+    setConfirmPassword('')
+    setNickname('')
+  }
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
-    setError(null)
-    setMessage(null)
     setLoading(true)
 
     const values = { email, password, confirmPassword, nickname }
 
     try {
       if (isSignUp) {
-        const steps = ['email', 'password', 'passwordConfirm'] as const
-        for (const step of steps) {
-          const stepError = validateSignUpStep(step, values)
-          if (stepError) {
-            setError(stepError)
-            showToast('회원가입에 실패했습니다.')
-            return
-          }
+        const validationError = validateSignUpForm(values)
+        if (validationError) {
+          showToast(AUTH_TOAST.signUpFailure(validationError), { variant: 'error' })
+          return
         }
 
         try {
           await signUp(email, password, { nickname: nickname.trim() })
         } catch (err) {
-          const raw = err instanceof Error ? err.message : '회원가입에 실패했습니다.'
-          setError(mapSignUpError(raw))
-          showToast('회원가입에 실패했습니다.')
+          const raw = err instanceof Error ? err.message : ''
+          showToast(AUTH_TOAST.signUpFailure(mapSignUpError(raw)), { variant: 'error' })
           return
         }
 
-        setMessage('회원가입이 완료되었습니다. 이메일 확인 후 로그인하세요.')
+        showToast(AUTH_TOAST.signUpSuccess, { variant: 'success' })
+        switchToLogin()
       } else {
-        await signIn(email, password)
+        const loginValidationError = validateLoginForm(email, password)
+        if (loginValidationError) {
+          showToast(AUTH_TOAST.loginFailure(loginValidationError), { variant: 'error' })
+          return
+        }
+
+        try {
+          await signIn(email, password)
+          showToast(AUTH_TOAST.loginSuccess, { variant: 'success' })
+        } catch (err) {
+          const raw = err instanceof Error ? err.message : ''
+          showToast(AUTH_TOAST.loginFailure(mapLoginError(raw)), { variant: 'error' })
+        }
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '인증에 실패했습니다.')
     } finally {
       setLoading(false)
     }
@@ -62,10 +74,9 @@ export function LoginForm() {
 
   const resetFormState = () => {
     setIsSignUp(!isSignUp)
-    setError(null)
-    setMessage(null)
     setConfirmPassword('')
     setNickname('')
+    setPassword('')
   }
 
   return (
@@ -77,14 +88,14 @@ export function LoginForm() {
         <h1 className="auth-title">Plan</h1>
         <p className="auth-subtitle">AI와 함께하는 스마트 일정 관리</p>
 
-        <form onSubmit={handleSubmit} className="auth-form">
+        <form onSubmit={handleSubmit} className="auth-form" noValidate>
           <label>
             이메일
             <input
-              type="email"
+              type="text"
+              inputMode="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              required
               autoComplete="email"
               placeholder="name@example.com"
             />
@@ -97,8 +108,6 @@ export function LoginForm() {
                 type="text"
                 value={nickname}
                 onChange={(e) => setNickname(e.target.value)}
-                required
-                minLength={2}
                 maxLength={20}
                 autoComplete="nickname"
                 placeholder="2~20자"
@@ -112,8 +121,6 @@ export function LoginForm() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={isSignUp ? 8 : undefined}
               autoComplete={isSignUp ? 'new-password' : 'current-password'}
               placeholder={isSignUp ? '8자 이상, 특수문자 1개 이상' : undefined}
             />
@@ -126,16 +133,11 @@ export function LoginForm() {
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                minLength={8}
                 autoComplete="new-password"
                 placeholder="비밀번호 재입력"
               />
             </label>
           )}
-
-          {error && <p className="auth-error">{error}</p>}
-          {message && <p className="auth-message">{message}</p>}
 
           <button type="submit" disabled={loading} className="auth-submit">
             {loading ? '처리 중...' : isSignUp ? '가입하기' : '로그인'}

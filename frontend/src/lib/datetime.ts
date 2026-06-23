@@ -108,6 +108,22 @@ export function getTodayLocalDateString(): string {
   return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`
 }
 
+/** FullCalendar(timeZone=UTC)에서 로컬 날짜 기준 "오늘" 표시용 */
+export function getCalendarNow(): Date {
+  const now = new Date()
+  return new Date(
+    Date.UTC(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+      now.getHours(),
+      now.getMinutes(),
+      now.getSeconds(),
+      now.getMilliseconds(),
+    ),
+  )
+}
+
 export function addDaysToDateString(dateStr: string, days: number): string {
   const { year, month, day } = extractWallClockParts(`${dateStr.slice(0, 10)}T00:00:00.000Z`)
   const base = new Date(Date.UTC(year, month - 1, day + days))

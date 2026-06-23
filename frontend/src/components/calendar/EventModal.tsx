@@ -1,4 +1,6 @@
 import { useState, type FormEvent } from 'react'
+import { ConfirmDialog } from '../common/ConfirmDialog'
+import { useToast } from '../../contexts/ToastContext'
 import {
   calendarDateToUtcIso,
   defaultAllDayEventUtcIso,
@@ -14,15 +16,17 @@ import {
   type EventCategory,
 } from '../../lib/categories'
 import { eventToFormData } from '../../lib/eventMapper'
-import type { CalendarEvent, EventFormData, RecurrenceFreq } from '../../types'
+import { EVENT_TOAST } from '../../lib/eventToast'
+import { mapEventError, validateEventForm } from '../../lib/eventValidation'
+import type { CalendarEvent, EventFormData, EventMutationResult, RecurrenceFreq } from '../../types'
 import './EventModal.css'
 
 interface EventModalProps {
   event: CalendarEvent | null
   initialRange?: { start: Date; end: Date; allDay: boolean } | null
   isRecurringInstanceEdit?: boolean
-  onSave: (form: EventFormData, eventId?: string) => Promise<void>
-  onDelete?: (eventId: string) => Promise<void>
+  onSave: (form: EventFormData, eventId?: string) => Promise<EventMutationResult>
+  onDelete?: (eventId: string) => Promise<EventMutationResult>
   onClose: () => void
 }
 
@@ -137,9 +141,11 @@ export function EventModal({
   onDelete,
   onClose,
 }: EventModalProps) {
+  const { showToast } = useToast()
   const [form, setForm] = useState(() => buildInitialForm(event, initialRange))
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const isEdit = Boolean(event)
 
   const recurrenceFreq = form.recurrence?.freq ?? ''
   const isEditingRecurringMaster = !!event?.recurrence_freq && !isRecurringInstanceEdit
@@ -181,42 +187,72 @@ export function EventModal({
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
-    if (!form.title.trim()) {
-      setError('제목을 입력해주세요.')
+
+    const prepared = prepareEventFormForSave(form)
+    const validationError = validateEventForm(prepared)
+    if (validationError) {
+      const toast = isEdit
+        ? EVENT_TOAST.updateFailure(validationError)
+        : EVENT_TOAST.createFailure(validationError)
+      showToast(toast, { variant: 'error' })
       return
     }
 
     setLoading(true)
-    setError(null)
 
     try {
-      await onSave(prepareEventFormForSave(form), event?.id)
+      const result = await onSave(prepared, event?.id)
+      if (result === 'deferred') {
+        onClose()
+        return
+      }
+      showToast(isEdit ? EVENT_TOAST.updateSuccess : EVENT_TOAST.createSuccess, {
+        variant: 'success',
+      })
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '저장에 실패했습니다.')
+      const reason = mapEventError(err instanceof Error ? err.message : '')
+      showToast(
+        isEdit ? EVENT_TOAST.updateFailure(reason) : EVENT_TOAST.createFailure(reason),
+        { variant: 'error' },
+      )
     } finally {
       setLoading(false)
     }
   }
 
-  const handleDelete = async () => {
+  const executeDelete = async () => {
     if (!event?.id || !onDelete) return
-    // 반복 일정은 범위 선택 다이얼로그에서 확인을 받으므로 여기서는 묻지 않는다.
-    if (!isRecurringInstanceEdit && !confirm('이 일정을 삭제하시겠습니까?')) return
 
     setLoading(true)
     try {
-      await onDelete(event.id)
+      const result = await onDelete(event.id)
+      if (result === 'deferred') {
+        onClose()
+        return
+      }
+      showToast(EVENT_TOAST.deleteSuccess, { variant: 'success' })
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '삭제에 실패했습니다.')
+      const reason = mapEventError(err instanceof Error ? err.message : '')
+      showToast(EVENT_TOAST.deleteFailure(reason), { variant: 'error' })
     } finally {
       setLoading(false)
     }
   }
 
+  const handleDelete = () => {
+    if (!event?.id || !onDelete) return
+    if (isRecurringInstanceEdit) {
+      void executeDelete()
+      return
+    }
+    setDeleteConfirmOpen(true)
+  }
+
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <>
+      <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>{event ? '일정 수정' : '일정 추가'}</h2>
@@ -225,14 +261,13 @@ export function EventModal({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="event-form">
+        <form onSubmit={handleSubmit} className="event-form" noValidate>
           <label>
             제목 *
             <input
               type="text"
               value={form.title}
               onChange={(e) => setForm({ ...form, title: e.target.value })}
-              required
             />
           </label>
 
@@ -266,7 +301,6 @@ export function EventModal({
                     start_at: localToUtc(e.target.value, form.all_day),
                   })
                 }
-                required
               />
             </label>
             <label>
@@ -280,7 +314,6 @@ export function EventModal({
                     end_at: localToUtc(e.target.value, form.all_day),
                   })
                 }
-                required
               />
             </label>
           </div>
@@ -419,8 +452,6 @@ export function EventModal({
             </div>
           </fieldset>
 
-          {error && <p className="form-error">{error}</p>}
-
           <div className="modal-actions">
             {event && onDelete && (
               <button
@@ -443,6 +474,17 @@ export function EventModal({
           </div>
         </form>
       </div>
-    </div>
+      </div>
+
+      {deleteConfirmOpen && (
+        <ConfirmDialog
+          title="이 일정을 삭제하시겠습니까?"
+          actions={[
+            { label: '삭제', variant: 'danger', onClick: () => void executeDelete() },
+          ]}
+          onClose={() => setDeleteConfirmOpen(false)}
+        />
+      )}
+    </>
   )
 }

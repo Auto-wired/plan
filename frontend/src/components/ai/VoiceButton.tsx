@@ -55,9 +55,8 @@ export function VoiceButton({ onTranscript, disabled }: VoiceButtonProps) {
   } = useSpeechRecognition(onTranscript)
 
   useEffect(() => {
-    if (error) {
-      showToast(error)
-    }
+    if (!error) return
+    showToast(error, { variant: 'error' })
   }, [error, showToast])
 
   if (!isSupported) {

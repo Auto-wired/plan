@@ -1,0 +1,71 @@
+.confirm-overlay {
+  z-index: 1200;
+}
+
+.confirm-dialog {
+  width: min(100%, 360px);
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  box-shadow: var(--shadow-lg);
+}
+
+.confirm-dialog h3 {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+
+.confirm-description {
+  margin: 0 0 20px;
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.confirm-actions--stacked {
+  flex-direction: column;
+}
+
+.confirm-cancel {
+  padding: 10px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.confirm-action {
+  padding: 10px 16px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--color-primary, #2563eb);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.confirm-action--danger {
+  background: var(--color-danger, #dc2626);
+}
+
+.confirm-action:hover {
+  filter: brightness(0.95);
+}
+
+/* 단일 액션(2버튼): 취소를 왼쪽, 액션을 오른쪽으로 */
+.confirm-actions:not(.confirm-actions--stacked) .confirm-cancel {
+  order: -1;
+}
+
+/* 다중 액션(3버튼): 세로 스택, 취소는 맨 아래 */
+.confirm-actions--stacked .confirm-action,
+.confirm-actions--stacked .confirm-cancel {
+  width: 100%;
+}

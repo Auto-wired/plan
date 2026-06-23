@@ -31,9 +31,11 @@ export function toFullCalendarEvent(event: ExpandedCalendarEvent): EventInput {
     allDay,
     backgroundColor: color,
     borderColor: color,
+    textColor: '#ffffff',
     extendedProps: {
       description: event.description,
       category: event.category,
+      categoryColor: color,
       start_at: startDb,
       end_at: endDb,
       masterId: event.masterId,
