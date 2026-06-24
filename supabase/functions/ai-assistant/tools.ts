@@ -5,11 +5,24 @@ import {
   getDateWeekdayNumber,
 } from './dateRanges.ts'
 import {
+  applyMutationScheduleSpec,
+  type EventTimeSnapshot,
   resolveQuerySchedule,
+  resolvedInstantToPayload,
 } from './resolveSchedule.ts'
+import {
+  hasRescheduleIntent,
+  hasScheduleFieldChanges,
+  sanitizeUpdateArgs,
+} from './mutationSafety.ts'
 import type { SessionContext } from './scheduleSpec.ts'
 import { expandOccurrences, type RecurrenceExceptionRow } from './recurrence.ts'
 import type { RecurringUpdateFields } from './recurrenceActions.ts'
+import {
+  isBlockedRecurringMutation,
+  isRecurringCreateArgs,
+  RECURRING_MUTATION_BLOCKED_MESSAGE,
+} from './recurringPolicy.ts'
 import type { ToolDefinition } from './providers/types.ts'
 import type { EventCategory } from './categories.ts'
 
@@ -66,6 +79,62 @@ export interface CalendarEvent {
 const CATEGORY_DESCRIPTION =
   '일정 카테고리: work(업무), life(일상), appointment(약속)'
 
+const SCHEDULE_SPEC_DATE_SCHEMA = {
+  type: 'object',
+  properties: {
+    kind: {
+      type: 'string',
+      enum: ['absolute', 'day', 'week', 'month_span', 'year'],
+    },
+    start_date: { type: 'string' },
+    end_date: { type: 'string' },
+    day_offset: { type: 'number', description: '0=오늘, 1=내일, 2=모레, 3=글피' },
+    week_offset: {
+      type: 'number',
+      description: '0=이번주, 1=다음주, 2=다다음주, -1=지난주',
+    },
+    month_offset: { type: 'number', description: '0=이번달, 1=다음달' },
+    year_offset: { type: 'number' },
+    weekday: {
+      type: 'string',
+      enum: ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'],
+    },
+  },
+  required: ['kind'],
+}
+
+const SCHEDULE_SPEC_SCHEMA = {
+  type: 'object',
+  description:
+    '일정 시각(권장). date + time. 예: 내일 저녁 → { date:{ kind:"day", day_offset:1 }, time:{ kind:"time_period", period:"evening" } }',
+  properties: {
+    date: SCHEDULE_SPEC_DATE_SCHEMA,
+    time: {
+      type: 'object',
+      description:
+        'all_day=종일, clock=구체 시각, time_period=저녁 등, preserve=update 시 기존 시각 유지(legacy start_at 필요)',
+      properties: {
+        kind: {
+          type: 'string',
+          enum: ['all_day', 'clock', 'time_period', 'preserve'],
+        },
+        hour: { type: 'number' },
+        minute: { type: 'number' },
+        period: {
+          type: 'string',
+          enum: ['dawn', 'morning', 'forenoon', 'daytime', 'afternoon', 'evening', 'night'],
+        },
+      },
+      required: ['kind'],
+    },
+    duration_minutes: {
+      type: 'number',
+      description: '시간 일정 기본 60분. end = start + duration',
+    },
+  },
+  required: ['date'],
+}
+
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'create_event',
@@ -74,8 +143,15 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       type: 'object',
       properties: {
         title: { type: 'string', description: '일정 제목' },
-        start_at: { type: 'string', description: '시작 시간 (ISO 8601 또는 YYYY-MM-DD)' },
-        end_at: { type: 'string', description: '종료 시간 (ISO 8601 또는 YYYY-MM-DD)' },
+        schedule_spec: SCHEDULE_SPEC_SCHEMA,
+        start_at: {
+          type: 'string',
+          description: 'legacy. schedule_spec 미사용 시 시작 (ISO 8601 또는 YYYY-MM-DD)',
+        },
+        end_at: {
+          type: 'string',
+          description: 'legacy. schedule_spec 미사용 시 종료 (ISO 8601 또는 YYYY-MM-DD)',
+        },
         all_day: { type: 'boolean', description: '종일 일정 여부' },
         description: { type: 'string', description: '일정 설명' },
         category: {
@@ -92,7 +168,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         recurrence_count: { type: 'number', description: '반복 횟수' },
         recurrence_until: { type: 'string', description: '반복 종료일 (YYYY-MM-DD)' },
       },
-      required: ['title', 'start_at', 'end_at'],
+      required: ['title'],
     },
   },
   {
@@ -108,8 +184,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             '반복 일정의 특정 회차를 수정할 때 그 회차의 시작 시각(조회 결과의 start_at). 반복이 아니면 생략.',
         },
         title: { type: 'string', description: '일정 제목' },
-        start_at: { type: 'string', description: '시작 시간 (ISO 8601)' },
-        end_at: { type: 'string', description: '종료 시간 (ISO 8601)' },
+        schedule_spec: SCHEDULE_SPEC_SCHEMA,
+        start_at: { type: 'string', description: 'legacy. 일정 이동 시 schedule_spec 권장' },
+        end_at: { type: 'string', description: 'legacy' },
         all_day: { type: 'boolean', description: '종일 일정 여부' },
         description: { type: 'string', description: '일정 설명' },
         category: {
@@ -149,29 +226,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           description:
             '날짜 의도(권장). date.kind: absolute|day|week|month_span|year. 예: 다다음주 수요일 → { date: { kind:"week", week_offset:2, weekday:"wed" } }, 내일 → { date: { kind:"day", day_offset:1 } }',
           properties: {
-            date: {
-              type: 'object',
-              properties: {
-                kind: {
-                  type: 'string',
-                  enum: ['absolute', 'day', 'week', 'month_span', 'year'],
-                },
-                start_date: { type: 'string' },
-                end_date: { type: 'string' },
-                day_offset: { type: 'number', description: '0=오늘, 1=내일, 2=모레, 3=글피' },
-                week_offset: {
-                  type: 'number',
-                  description: '0=이번주, 1=다음주, 2=다다음주, -1=지난주',
-                },
-                month_offset: { type: 'number', description: '0=이번달, 1=다음달' },
-                year_offset: { type: 'number' },
-                weekday: {
-                  type: 'string',
-                  enum: ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'],
-                },
-              },
-              required: ['kind'],
-            },
+            date: SCHEDULE_SPEC_DATE_SCHEMA,
           },
           required: ['date'],
         },
@@ -219,13 +274,14 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'propose_action',
     description:
-      'Use ONLY when the request is ambiguous (unclear target, date, time, or intent). Do NOT execute the real tool. Instead propose your best-guess interpretation as a Korean question and provide the exact action to run if the user confirms. The app shows the user 맞다/아니다 buttons.',
+      'Use ONLY when the request is ambiguous (unclear target, date, time, or intent). Do NOT execute the real tool. Provide the exact action (name + arguments) to run if the user confirms. The SERVER builds the Korean confirmation message from resolved schedule — do NOT rely on question text matching action. The app shows 맞다/아니다 buttons.',
     parameters: {
       type: 'object',
       properties: {
         question: {
           type: 'string',
-          description: '사용자에게 보여줄 확인 질문(한국어). 추측한 해석을 설명한다.',
+          description:
+            'Optional legacy field — ignored by the app. Confirmation text is generated server-side from action.arguments.',
         },
         action: {
           type: 'object',
@@ -240,7 +296,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           required: ['name', 'arguments'],
         },
       },
-      required: ['question', 'action'],
+      required: ['action'],
     },
   },
 ]
@@ -344,25 +400,56 @@ function recurrencePayload(args: Record<string, unknown>, timezone: string) {
 export function buildUpdateFields(
   args: Record<string, unknown>,
   timezone: string,
+  referenceIso = new Date().toISOString(),
+  existingEvent?: EventTimeSnapshot,
+  userMessage?: string,
 ): RecurringUpdateFields {
-  const fields: RecurringUpdateFields = {}
-  if (args.title !== undefined) fields.title = String(args.title)
-  if (args.description !== undefined) {
-    fields.description = args.description ? String(args.description) : null
-  }
-  if (args.category !== undefined) fields.category = parseCategory(args.category)
+  const safe = userMessage !== undefined
+    ? sanitizeUpdateArgs(args, userMessage)
+    : sanitizeUpdateArgs(args, '')
+  const reschedule = hasRescheduleIntent(userMessage ?? '', safe)
 
-  const hasDateChange = args.start_at !== undefined || args.end_at !== undefined
+  const fields: RecurringUpdateFields = {}
+  if (safe.title !== undefined) fields.title = String(safe.title)
+  if (safe.description !== undefined) {
+    fields.description = safe.description ? String(safe.description) : null
+  }
+  if (safe.category !== undefined) fields.category = parseCategory(safe.category)
+
+  if (!reschedule) {
+    return fields
+  }
+
+  const { args: normalized } = applyMutationScheduleSpec(safe, referenceIso, timezone, {
+    existingEvent,
+    mode: 'update',
+    userMessage,
+  })
+
+  const hasDateChange =
+    normalized.start_at !== undefined || normalized.end_at !== undefined
   const allDay =
-    hasDateChange || args.all_day !== undefined ? inferAllDayFromArgs(args) : undefined
+    hasDateChange || normalized.all_day !== undefined
+      ? inferAllDayFromArgs(normalized)
+      : undefined
   if (allDay !== undefined) fields.all_day = allDay
 
   const effectiveAllDay = allDay ?? false
-  if (args.start_at !== undefined) {
-    fields.start_at = toUtcTimestamp(args.start_at, 'start_at', timezone, effectiveAllDay)
+  if (normalized.start_at !== undefined) {
+    fields.start_at = toUtcTimestamp(
+      normalized.start_at,
+      'start_at',
+      timezone,
+      effectiveAllDay,
+    )
   }
-  if (args.end_at !== undefined) {
-    fields.end_at = toUtcTimestamp(args.end_at, 'end_at', timezone, effectiveAllDay)
+  if (normalized.end_at !== undefined) {
+    fields.end_at = toUtcTimestamp(
+      normalized.end_at,
+      'end_at',
+      timezone,
+      effectiveAllDay,
+    )
   }
   return fields
 }
@@ -374,15 +461,30 @@ export async function executeTool(
   args: Record<string, unknown>,
   timezone = 'UTC',
   currentDate = new Date().toISOString(),
+  options?: { userMessage?: string },
 ): Promise<{ result: unknown; events: CalendarEvent[] }> {
   switch (name) {
     case 'create_event': {
+      if (isRecurringCreateArgs(args)) {
+        throw new Error(RECURRING_MUTATION_BLOCKED_MESSAGE)
+      }
+
       const title = String(args.title ?? '').trim()
       if (!title) throw new Error('title is required')
 
-      const allDay = inferAllDayFromArgs(args)
-      const start_at = toUtcTimestamp(args.start_at, 'start_at', timezone, allDay)
-      const end_at = toUtcTimestamp(args.end_at, 'end_at', timezone, allDay)
+      const { args: normalized, resolved } = applyMutationScheduleSpec(
+        args,
+        currentDate,
+        timezone,
+        { mode: 'create', userMessage: options?.userMessage },
+      )
+      if (!normalized.start_at || !normalized.end_at) {
+        throw new Error('schedule_spec or start_at/end_at is required')
+      }
+
+      const allDay = inferAllDayFromArgs(normalized)
+      const start_at = toUtcTimestamp(normalized.start_at, 'start_at', timezone, allDay)
+      const end_at = toUtcTimestamp(normalized.end_at, 'end_at', timezone, allDay)
 
       const { data, error } = await supabase
         .from('events')
@@ -392,40 +494,105 @@ export async function executeTool(
           start_at,
           end_at,
           all_day: allDay,
-          description: args.description ? String(args.description) : null,
-          category: args.category ? parseCategory(args.category) : DEFAULT_EVENT_CATEGORY,
-          ...recurrencePayload(args, timezone),
+          description: normalized.description ? String(normalized.description) : null,
+          category: normalized.category
+            ? parseCategory(normalized.category)
+            : DEFAULT_EVENT_CATEGORY,
+          ...recurrencePayload(normalized, timezone),
         })
         .select()
         .single()
 
       if (error) throw error
-      return { result: { success: true, event: data }, events: [data as CalendarEvent] }
+      return {
+        result: {
+          success: true,
+          event: data,
+          resolved: resolved ? resolvedInstantToPayload(resolved) : null,
+        },
+        events: [data as CalendarEvent],
+      }
     }
 
     case 'update_event': {
       const id = String(args.id ?? '')
       if (!id) throw new Error('id is required')
 
-      const payload: Record<string, unknown> = {}
-      if (args.title !== undefined) payload.title = String(args.title)
-      if (args.description !== undefined) payload.description = String(args.description)
+      if (await isBlockedRecurringMutation(supabase, 'update_event', args)) {
+        throw new Error(RECURRING_MUTATION_BLOCKED_MESSAGE)
+      }
 
-      const hasDateChange = args.start_at !== undefined || args.end_at !== undefined
-      const allDay = hasDateChange || args.all_day !== undefined
-        ? inferAllDayFromArgs(args)
+      const userMessage = options?.userMessage ?? ''
+      const safe = sanitizeUpdateArgs(args, userMessage)
+      const reschedule = hasRescheduleIntent(userMessage, safe)
+
+      const { data: existing } = await supabase
+        .from('events')
+        .select('start_at, end_at, all_day')
+        .eq('id', id)
+        .maybeSingle()
+
+      const existingEvent: EventTimeSnapshot | undefined = existing
+        ? {
+            start_at: String(existing.start_at),
+            end_at: String(existing.end_at),
+            all_day: Boolean(existing.all_day),
+          }
         : undefined
 
-      if (allDay !== undefined) payload.all_day = allDay
+      let normalized = safe
+      let resolved = null
+      if (reschedule) {
+        const applied = applyMutationScheduleSpec(safe, currentDate, timezone, {
+          existingEvent,
+          mode: 'update',
+          userMessage,
+        })
+        normalized = applied.args
+        resolved = applied.resolved
+      }
 
-      const effectiveAllDay = allDay ?? false
-      if (args.start_at !== undefined) {
-        payload.start_at = toUtcTimestamp(args.start_at, 'start_at', timezone, effectiveAllDay)
+      const payload: Record<string, unknown> = {}
+      if (normalized.title !== undefined) payload.title = String(normalized.title)
+      if (normalized.description !== undefined) {
+        payload.description = String(normalized.description)
       }
-      if (args.end_at !== undefined) {
-        payload.end_at = toUtcTimestamp(args.end_at, 'end_at', timezone, effectiveAllDay)
+
+      if (reschedule) {
+        const hasDateChange =
+          normalized.start_at !== undefined || normalized.end_at !== undefined
+        const allDay =
+          hasDateChange || normalized.all_day !== undefined
+            ? inferAllDayFromArgs(normalized)
+            : undefined
+
+        if (allDay !== undefined) payload.all_day = allDay
+
+        const effectiveAllDay = allDay ?? false
+        if (normalized.start_at !== undefined) {
+          payload.start_at = toUtcTimestamp(
+            normalized.start_at,
+            'start_at',
+            timezone,
+            effectiveAllDay,
+          )
+        }
+        if (normalized.end_at !== undefined) {
+          payload.end_at = toUtcTimestamp(
+            normalized.end_at,
+            'end_at',
+            timezone,
+            effectiveAllDay,
+          )
+        }
       }
-      if (args.category !== undefined) payload.category = parseCategory(args.category)
+      if (normalized.category !== undefined) {
+        payload.category = parseCategory(normalized.category)
+      }
+
+      if (Object.keys(payload).length === 0) {
+        throw new Error('No update fields provided')
+      }
 
       const { data, error } = await supabase
         .from('events')
@@ -435,12 +602,23 @@ export async function executeTool(
         .single()
 
       if (error) throw error
-      return { result: { success: true, event: data }, events: [data as CalendarEvent] }
+      return {
+        result: {
+          success: true,
+          event: data,
+          resolved: resolved ? resolvedInstantToPayload(resolved) : null,
+        },
+        events: [data as CalendarEvent],
+      }
     }
 
     case 'delete_event': {
       const id = String(args.id ?? '')
       if (!id) throw new Error('id is required')
+
+      if (await isBlockedRecurringMutation(supabase, 'delete_event', args)) {
+        throw new Error(RECURRING_MUTATION_BLOCKED_MESSAGE)
+      }
 
       // 삭제 전 스냅샷 확보 (상단 목록 비활성 표시용)
       const { data: existing } = await supabase
@@ -643,15 +821,30 @@ Time-of-day filter (query_events.time_period):
 - Weekend/weekday: 주말 → day_type=weekend (Sat/Sun), 평일 → day_type=weekday (Mon-Fri).
 - Combine schedule_spec/date + time_period + day_type + keyword as AND.
 
-Confirmation:
-- Deletion always requires user confirmation. To delete, call delete_event with the target id (query first to find the id if needed). The app shows a confirm dialog and runs the deletion only after the user agrees — so do NOT additionally ask "삭제할까요?" in text.
-- If the request is ambiguous (unclear target, date, time, or intent), do NOT call create_event/update_event/delete_event directly. Instead call propose_action with a Korean question and your best-guess action; the user will confirm with 맞다/아니다.
-- For update/delete, if multiple events match, query first; if still ambiguous which one, use propose_action. Never auto-pick among multiple candidates.
-- Adding events and clearly-specified updates do NOT need confirmation — just call the tool.
+Create/update schedule (prefer schedule_spec over legacy start_at):
+- For create_event and update_event (date/time changes), use schedule_spec with date + time.
+- **update_event metadata-only (title/description/category only):** do NOT pass schedule_spec, start_at, or end_at. Phrases like "이번 주 팀회의" identify the target — they are NOT a schedule change.
+- **update_event reschedule:** pass schedule_spec with date + time ONLY when moving/rescheduling (옮겨, 미뤄, ~시로 변경). Include time.clock when user gives a specific time.
+- date mapping is the same as query schedule_spec.date.
+- time.kind: all_day (종일), clock (hour/minute for concrete times), time_period (evening→18:00 KST start, default 60min duration).
+- Examples: 「내일 저녁 운동」→ schedule_spec { date:{ kind:"day", day_offset:1 }, time:{ kind:"time_period", period:"evening" } }; 「다음 주 금요일 3시로 옮겨」→ { date:{ kind:"week", week_offset:1, weekday:"fri" }, time:{ kind:"clock", hour:15 } }; 「이번 주 팀회의 제목을 주간회의로」→ update_event { id, title:"주간회의" } only (no schedule_spec).
+- After create/update, use result.resolved (resolved_label, time_label, start_at) in replies — do NOT recalculate dates/times.
+- legacy start_at/end_at still work for reschedule but schedule_spec is preferred.
 
-Recurring update/delete:
-- To update or delete a specific occurrence of a recurring event, pass id = the master id AND original_start_at = that occurrence's start_at (from query results). The app will ask the user to choose 「해당 일정만」 or 「전체 일정」 — you do NOT decide the scope.
-- For non-recurring events, just pass id (omit original_start_at).
+Confirmation (V3 target + V2.4 interpret):
+- For update/delete, the SERVER runs identifyEvents first. Do NOT ask clarifying questions in chat when candidates exist.
+- 0 matches → explain in chat that no event was found; ask for a clearer title or date.
+- 6+ matches → explain in chat that too many events matched; ask the user to narrow down.
+- 2–5 matches → call update_event/delete_event or propose_action with your best-guess arguments; the app shows a pick-target list (user selects one).
+- 1 match → proceed with that event id.
+- After target is clear, if date/time interpretation is still ambiguous, use propose_action (맞다/아니다 with server-built message).
+- Deletion always requires user confirmation via delete_event tool (app shows Confirm dialog).
+- If the request is ambiguous, do NOT additionally ask in chat — use tools so the app can show pick-target or 맞다/아니다.
+
+Recurring events (IMPORTANT):
+- You MAY query recurring events (query_events expands occurrences).
+- Do NOT create, update, or delete recurring events via tools. If the user asks to add/modify/delete a recurring series or a specific occurrence, reply in Korean that recurring add/edit/delete must be done in the calendar UI — do NOT call create_event with recurrence_freq, update_event, or delete_event on a recurring master id.
+- For non-recurring events only: delete_event with id; update_event with id (omit original_start_at).
 
 Other:
 - After tool execution, summarize what was done in natural Korean. For queries, summarize the results.
@@ -660,5 +853,5 @@ Other:
 - All-day events (종일): all_day=true, date-only values (YYYY-MM-DD), end_at is the last day inclusive.
 - Multi-day all-day (e.g. Mon–Thu): all_day=true, start_at=first day, end_at=last day, both date-only.
 - Timed events: all_day=false with specific times.
-- Recurring events: recurrence_freq (daily/weekly/monthly/yearly), optional recurrence_interval, recurrence_count, recurrence_until.`
+- Do NOT set recurrence_freq on create_event — recurring creation is calendar-only.`
 }

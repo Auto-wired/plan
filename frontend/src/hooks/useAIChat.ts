@@ -159,6 +159,8 @@ export function useAIChat() {
           body: {
             mode: 'confirm',
             pendingAction: pendingConfirmation.pendingAction,
+            triggerUserMessage: pendingConfirmation.triggerUserMessage,
+            sessionContext,
             scope,
             currentDate: new Date().toISOString(),
             timezone: AI_TIMEZONE,
@@ -186,13 +188,70 @@ export function useAIChat() {
       setIsLoading(false)
     }
     },
-    [pendingConfirmation, isLoading, queryClient],
+    [pendingConfirmation, isLoading, queryClient, sessionContext],
   )
 
   /** 되묻기 거부: 보류를 취소하고 사용자가 다시 입력하도록 한다. */
   const rejectPending = useCallback(() => {
     setPendingConfirmation(null)
   }, [])
+
+  /** pick-target: 목록에서 일정 선택 후 후속 mutation (V3). */
+  const pickTarget = useCallback(
+    async (selectedEventId: string) => {
+      if (!pendingConfirmation || pendingConfirmation.kind !== 'pick-target' || isLoading) {
+        return
+      }
+      const intent = pendingConfirmation.pendingIntent
+      if (!intent?.tool) return
+
+      setIsLoading(true)
+      setError(null)
+
+      try {
+        const { data, error: invokeError } = await supabase.functions.invoke<AIResponse>(
+          'ai-assistant',
+          {
+            body: {
+              mode: 'pick-target',
+              selectedEventId,
+              pendingIntent: intent,
+              fromPropose: pendingConfirmation.fromPropose ?? false,
+              triggerUserMessage: pendingConfirmation.triggerUserMessage,
+              sessionContext,
+              currentDate: new Date().toISOString(),
+              timezone: AI_TIMEZONE,
+            },
+          },
+        )
+
+        if (invokeError) throw invokeError
+        if (!data) throw new Error('AI 응답이 없습니다.')
+
+        setMessages((prev) => [...prev, createMessage('assistant', data.reply)])
+
+        if (data.pendingConfirmation) {
+          setPendingConfirmation(data.pendingConfirmation)
+        } else {
+          setPendingConfirmation(null)
+          setLastEvents(data.events ?? [])
+          setLastResultKind(data.resultKind ?? null)
+          setLastQuery(data.query ?? null)
+        }
+
+        if (data.actions?.length) {
+          await queryClient.invalidateQueries({ queryKey: ['events'] })
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : '요청 처리에 실패했습니다.'
+        setError(message)
+        setMessages((prev) => [...prev, createMessage('assistant', `오류: ${message}`)])
+      } finally {
+        setIsLoading(false)
+      }
+    },
+    [pendingConfirmation, isLoading, queryClient, sessionContext],
+  )
 
   const clearChat = useCallback(() => {
     setMessages([])
@@ -217,6 +276,7 @@ export function useAIChat() {
     loadMore,
     confirmPending,
     rejectPending,
+    pickTarget,
     clearChat,
   }
 }

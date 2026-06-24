@@ -32,6 +32,7 @@
 | 2 | `recurrenceActions.ts` 남은 회차 수·§5-7 | ⏳ 미작성 (핵심 로직은 `recurrence.ts`에서 테스트) |
 | 2 | `eventMapper.ts` `recurrenceRuleChanged` | ✅ `eventMapper.test.ts` |
 | 2 | `datetime.ts` | ✅ `datetime.test.ts` |
+| 2 | `mutationSafety.ts` (target/changes) | ✅ `mutationSafety.test.ts` |
 | 3 | React 컴포넌트·FullCalendar·Supabase | ⏳ 미작성 (jsdom/E2E 별도) |
 
 ---
@@ -45,8 +46,12 @@
 | `frontend/src/lib/recurrence.test.ts` | 6 |
 | `frontend/src/lib/eventMapper.test.ts` | 7 |
 | `frontend/src/lib/datetime.test.ts` | 15 |
+| `supabase/functions/ai-assistant/resolveSchedule.test.ts` | 18 |
+| `supabase/functions/ai-assistant/mutationSafety.test.ts` | 5 |
+| `supabase/functions/ai-assistant/confirmProposal.test.ts` | 3 |
+| `supabase/functions/ai-assistant/identifyEvents.test.ts` | 3 |
 
-**합계:** 50 (Vitest `npm test` 기준)
+**합계:** 85 (Vitest `npm test` 기준)
 
 ---
 
@@ -132,19 +137,35 @@ Edge Function 배포 후 또는 큰 변경 후 실행한다. 체크 시 `[x]`로
 
 - [X] 일정 추가 후 상단 **「추가된 일정 N건」**, 클릭 시 Modal
 - [X] 개별 일정 수정 → **「수정된 일정 N건」** (되묻기 없음)
-- [ ] 반복 일정 수정 → Confirm(`취소`/`해당 일정만`/`전체 일정`) → 달력 결과와 동일
+- [X] **V2** 「내일 저녁 운동 추가」→ `schedule_spec` + `result.resolved`·달력 시각 일치 (18:00 KST)
+- [X] **V2.1** 「다음 주 금요일 3시로 옮겨줘」→ update `schedule_spec` + `resolved`·달력 **15:00 KST** (종일 아님)
+- [X] **V2.2** 「이번 주 팀회의 제목을 주간회의로」→ **제목만** 변경, 일~토 분리·종일화 **없음** (비반복)
+
+### AI — 반복 mutation 차단 (V2.3)
+
+- [X] 반복 일정 **추가** 요청 → 실행 없음, 달력 안내 메시지
+- [X] 반복 일정 **수정** 요청 → 3버튼 Dialog **없음**, 달력 안내 메시지
+- [X] 반복 일정 **삭제** 요청 → 3버튼 Dialog **없음**, 달력 안내 메시지
+- [X] 반복 일정 **조회** → 기존과 동일 (회차 전개)
 
 ### AI — 삭제 (2·3차)
 
-- [ ] 개별 삭제 → Confirm(`취소`/`삭제`) → **「삭제된 일정 N건」** (비활성·취소선, 클릭 불가)
-- [ ] 반복 삭제 → Confirm(`취소`/`해당 일정만`/`전체 일정` 또는 마지막 1회차 `전체 삭제`)
-- [ ] 삭제 결과가 달력과 동일하게 반영
+- [X] 개별 삭제 → Confirm(`취소`/`삭제`) → **「삭제된 일정 N건」** (비활성·취소선, 클릭 불가)
+- [X] 삭제 결과가 달력과 동일하게 반영
 
-### AI — 되묻기 (2차)
+### AI — pick-target (V3)
 
-- [ ] 모호한 요청 → AI가 해석 제안 + **「맞다」/「아니다」** 버튼
-- [ ] **맞다** → LLM 재호출 없이 실행 (네트워크 탭에서 `mode: confirm` 확인 가능)
-- [ ] **아니다** → 입력창 포커스, 사용자가 보충 입력
+- [ ] 「미팅」2~5건 → **일정 목록** 표시 (채팅 자유 질문 **없음**)
+- [ ] 목록에서 선택 → **삭제**면 Confirm / **날짜 이동**이면 **맞다/아니다**
+- [ ] 0건 → 「일치하는 일정을 찾지 못했습니다…」채팅
+- [ ] 6건+ → 「너무 많습니다…」채팅
+
+### AI — 되묻기 (2차 · V2.4)
+
+- [X] 모호한 요청 → **서버 생성** 확인 문장 + **「맞다」/「아니다」** 버튼 (LLM question 무시)
+- [ ] **맞다** → LLM 재호출 없이 실행 (`mode: confirm`, `triggerUserMessage` 전달)
+- [ ] **V2.4** 모호한 **날짜 이동** → 확인 문장의 날짜·시각 = 맞다 후 달력 반영
+- [X] **아니다** → 입력창 포커스, 사용자가 보충 입력
 
 ### AI — 음성 (1차)
 

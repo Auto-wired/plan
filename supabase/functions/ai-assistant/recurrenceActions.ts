@@ -1,6 +1,7 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { advanceOccurrence } from './recurrence.ts'
 import type { CalendarEvent } from './tools.ts'
+import { hasScheduleFieldChanges } from './mutationSafety.ts'
 
 interface ExceptionRow {
   id: string
@@ -186,9 +187,15 @@ export async function updateRecurringByScope(
   // scope === 'this': 제외 후 독립 단일 일정으로 분리
   await excludeOccurrence(supabase, master.id, originalStartAt)
 
-  const start_at = fields.start_at ?? normalizeStamp(originalStartAt)
-  const end_at =
-    fields.end_at ?? new Date(new Date(start_at).getTime() + masterDuration).toISOString()
+  const scheduleChanged = hasScheduleFieldChanges(fields)
+  const start_at = scheduleChanged
+    ? (fields.start_at ?? normalizeStamp(originalStartAt))
+    : normalizeStamp(originalStartAt)
+  const end_at = scheduleChanged
+    ? (fields.end_at ??
+      new Date(new Date(start_at).getTime() + masterDuration).toISOString())
+    : new Date(new Date(originalStartAt).getTime() + masterDuration).toISOString()
+  const all_day = scheduleChanged ? (fields.all_day ?? master.all_day) : master.all_day
 
   const { data, error } = await supabase
     .from('events')
@@ -198,7 +205,7 @@ export async function updateRecurringByScope(
       description: fields.description !== undefined ? fields.description : master.description,
       start_at,
       end_at,
-      all_day: fields.all_day ?? master.all_day,
+      all_day,
       category: fields.category ?? master.category,
       recurrence_freq: null,
       recurrence_interval: 1,

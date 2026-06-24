@@ -27,7 +27,6 @@ export type DateSpec =
       year_offset: number
     }
 
-/** V1 query uses top-level time_period; full TimeSpec in V2. */
 export type TimeSpec =
   | { kind: 'all_day' }
   | { kind: 'clock'; hour: number; minute?: number }
@@ -37,6 +36,20 @@ export type TimeSpec =
 export type ScheduleSpec = {
   date: DateSpec
   time?: TimeSpec
+  /** Timed events: end = start + duration (default 60). */
+  duration_minutes?: number
+}
+
+/** V2: create/update instant resolution result. */
+export interface ResolvedInstant {
+  start_at: string
+  end_at: string
+  all_day: boolean
+  resolved_label: string
+  resolved_date?: string
+  weekday_ko?: string
+  time_label?: string
+  confidence: ResolveConfidence
 }
 
 export type ResolveConfidence = 'high' | 'medium' | 'low'

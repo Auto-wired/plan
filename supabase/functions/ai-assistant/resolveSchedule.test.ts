@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyMutationScheduleSpec,
   canonicalQueryArgsForPagination,
+  enrichMutationScheduleArgs,
   legacyArgsToDateSpec,
+  legacyMutationToScheduleSpec,
+  parseTimeSpec,
+  resolveInstantSchedule,
   resolveQuerySchedule,
   resolveSchedule,
 } from './resolveSchedule.ts'
@@ -115,5 +120,145 @@ describe('resolveSchedule', () => {
     })
     expect(canonical.period).toBeUndefined()
     expect(canonical.schedule_spec).toBeUndefined()
+  })
+})
+
+describe('resolveInstantSchedule (V2)', () => {
+  it('day_offset + evening: 내일 저녁', () => {
+    const r = resolveInstantSchedule(
+      {
+        date: { kind: 'day', day_offset: 1 },
+        time: { kind: 'time_period', period: 'evening' },
+      },
+      REF,
+      TZ,
+      'high',
+    )
+    expect(r.start_at).toBe('2026-06-23T18:00:00.000Z')
+    expect(r.end_at).toBe('2026-06-23T19:00:00.000Z')
+    expect(r.all_day).toBe(false)
+    expect(r.resolved_label).toContain('내일')
+    expect(r.time_label).toBe('저녁')
+  })
+
+  it('week + clock: 다음 주 금요일 15:30', () => {
+    const r = resolveInstantSchedule(
+      {
+        date: { kind: 'week', week_offset: 1, weekday: 'fri' },
+        time: { kind: 'clock', hour: 15, minute: 30 },
+        duration_minutes: 90,
+      },
+      REF,
+      TZ,
+      'high',
+    )
+    expect(r.start_at).toBe('2026-07-03T15:30:00.000Z')
+    expect(r.end_at).toBe('2026-07-03T17:00:00.000Z')
+    expect(r.weekday_ko).toBe('금요일')
+  })
+
+  it('all_day: 모레 종일', () => {
+    const r = resolveInstantSchedule(
+      {
+        date: { kind: 'day', day_offset: 2 },
+        time: { kind: 'all_day' },
+      },
+      REF,
+      TZ,
+      'high',
+    )
+    expect(r.all_day).toBe(true)
+    expect(r.start_at).toBe('2026-06-24T00:00:00.000Z')
+    expect(r.end_at).toBe('2026-06-24T00:00:00.000Z')
+    expect(r.time_label).toBe('종일')
+  })
+
+  it('applyMutationScheduleSpec from schedule_spec', () => {
+    const { args, resolved } = applyMutationScheduleSpec(
+      {
+        title: '운동',
+        schedule_spec: {
+          date: { kind: 'day', day_offset: 1 },
+          time: { kind: 'clock', hour: 9 },
+        },
+      },
+      REF,
+      TZ,
+    )
+    expect(args.start_at).toBe('2026-06-23T09:00:00.000Z')
+    expect(args.all_day).toBe(false)
+    expect(resolved?.confidence).toBe('high')
+  })
+
+  it('legacy start_at bridge', () => {
+    const { spec, confidence } = legacyMutationToScheduleSpec({
+      start_at: '2026-06-25T14:00:00.000Z',
+      end_at: '2026-06-25T15:30:00.000Z',
+    })
+    expect(confidence).toBe('medium')
+    expect(spec?.time?.kind).toBe('clock')
+    if (spec?.time?.kind === 'clock') {
+      expect(spec.time.hour).toBe(14)
+      expect(spec.duration_minutes).toBe(90)
+    }
+  })
+})
+
+describe('V2.1 update time merge', () => {
+  const existing = {
+    start_at: '2026-06-25T18:00:00.000Z',
+    end_at: '2026-06-25T19:00:00.000Z',
+    all_day: false,
+  }
+
+  it('메시지 3시 → clock 15:00', () => {
+    const { args, resolved } = applyMutationScheduleSpec(
+      {
+        id: 'e1',
+        schedule_spec: {
+          date: { kind: 'week', week_offset: 1, weekday: 'fri' },
+        },
+      },
+      REF,
+      TZ,
+      { mode: 'update', userMessage: '다음 주 금요일 3시로 옮겨줘' },
+    )
+    expect(args.start_at).toBe('2026-07-03T15:00:00.000Z')
+    expect(args.all_day).toBe(false)
+    expect(resolved?.time_label).toBe('15:00')
+  })
+
+  it('time 없고 메시지도 없으면 기존 시각 유지', () => {
+    const { args, resolved } = applyMutationScheduleSpec(
+      {
+        id: 'e1',
+        schedule_spec: {
+          date: { kind: 'week', week_offset: 1, weekday: 'fri' },
+        },
+      },
+      REF,
+      TZ,
+      { mode: 'update', existingEvent: existing },
+    )
+    expect(args.start_at).toBe('2026-07-03T18:00:00.000Z')
+    expect(args.end_at).toBe('2026-07-03T19:00:00.000Z')
+    expect(args.all_day).toBe(false)
+    expect(resolved?.all_day).toBe(false)
+  })
+
+  it('enrichMutationScheduleArgs: schedule_spec에 time 주입', () => {
+    const enriched = enrichMutationScheduleArgs(
+      {
+        schedule_spec: { date: { kind: 'week', week_offset: 1, weekday: 'fri' } },
+      },
+      '다음 주 금요일 3시로',
+    )
+    const spec = enriched.schedule_spec as { time?: { kind: string; hour?: number } }
+    expect(spec.time?.kind).toBe('clock')
+    expect(spec.time?.hour).toBe(15)
+  })
+
+  it('parseTimeSpec: kind 없이 hour만', () => {
+    expect(parseTimeSpec({ hour: 15 })).toEqual({ kind: 'clock', hour: 15, minute: 0 })
   })
 })

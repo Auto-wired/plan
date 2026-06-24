@@ -97,7 +97,7 @@
 |------|------|
 | 개별 수정 (Confirm 없음) | ✅ 구현 |
 | 반복 수정 범위 선택 (공용 `ConfirmDialog`, 취소/해당 일정만/전체 일정) | ✅ 구현 |
-| AI 반복 수정 범위 (달력 공통, Edge `recurrenceActions.ts`) | ✅ 구현 |
+| AI 반복 수정 범위 | ⏸ 보류 (V2.3 차단, [AI_ASSISTANT.md](./AI_ASSISTANT.md) §7-0) |
 
 ---
 

@@ -112,10 +112,21 @@ export interface AIPendingAction {
   arguments: Record<string, unknown>
 }
 
+export interface IdentifyCandidate {
+  id: string
+  title: string
+  start_at: string
+  end_at: string
+  all_day: boolean
+}
+
 export interface AIPendingConfirmation {
-  kind: 'delete' | 'recurring-delete' | 'recurring-update' | 'ambiguous'
+  kind: 'delete' | 'recurring-delete' | 'recurring-update' | 'ambiguous' | 'pick-target'
   message: string
-  pendingAction: AIPendingAction
+  pendingAction?: AIPendingAction
+  candidates?: IdentifyCandidate[]
+  pendingIntent?: AIPendingAction
+  fromPropose?: boolean
   target?: {
     title: string
     start_at: string
@@ -124,6 +135,8 @@ export interface AIPendingConfirmation {
   } | null
   /** recurring-delete: 유한 반복 마지막 1회차 → 「전체 삭제」만 */
   lastOne?: boolean
+  /** 되묻기를 트리거한 사용자 메시지 (confirm 시 재전달). */
+  triggerUserMessage?: string
 }
 
 export interface AIResponse {

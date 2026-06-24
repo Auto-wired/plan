@@ -13,6 +13,7 @@ function buildConfirmActions(
   pc: AIPendingConfirmation,
   confirm: (scope?: 'this' | 'all') => void,
 ): ConfirmAction[] {
+  if (!pc.pendingAction) return []
   switch (pc.kind) {
     case 'delete':
       return [{ label: '삭제', variant: 'danger', onClick: () => confirm() }]
@@ -140,6 +141,7 @@ export function AIAssistantPanel({ onEventClick }: AIAssistantPanelProps) {
     loadMore,
     confirmPending,
     rejectPending,
+    pickTarget,
     clearChat,
   } = useAIChat()
   const [input, setInput] = useState('')
@@ -235,6 +237,43 @@ export function AIAssistantPanel({ onEventClick }: AIAssistantPanelProps) {
           </div>
         )}
 
+        {pendingConfirmation?.kind === 'pick-target' && !isLoading && (
+          <div className="ai-pick-target">
+            <ul>
+              {(pendingConfirmation.candidates ?? []).map((event) => (
+                <li key={event.id}>
+                  <button
+                    type="button"
+                    className="ai-event-item"
+                    onClick={() => void pickTarget(event.id)}
+                  >
+                    <span
+                      className="ai-event-dot"
+                      style={{ background: 'var(--color-primary, #6366f1)' }}
+                    />
+                    <div className="ai-event-info">
+                      <strong>{event.title}</strong>
+                      <span>
+                        {formatEventScheduleRange(event.start_at, event.end_at, event.all_day)}
+                      </span>
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="ai-confirm-no ai-pick-cancel"
+              onClick={() => {
+                rejectPending()
+                inputRef.current?.focus()
+              }}
+            >
+              취소
+            </button>
+          </div>
+        )}
+
         {pendingConfirmation?.kind === 'ambiguous' && !isLoading && (
           <div className="ai-confirm-inline">
             <button
@@ -279,7 +318,10 @@ export function AIAssistantPanel({ onEventClick }: AIAssistantPanelProps) {
         </button>
       </form>
 
-      {pendingConfirmation && pendingConfirmation.kind !== 'ambiguous' && (
+      {pendingConfirmation &&
+        pendingConfirmation.kind !== 'ambiguous' &&
+        pendingConfirmation.kind !== 'pick-target' &&
+        pendingConfirmation.pendingAction && (
         <ConfirmDialog
           title={pendingConfirmation.message}
           actions={buildConfirmActions(pendingConfirmation, (scope) =>

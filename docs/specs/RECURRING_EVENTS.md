@@ -88,7 +88,8 @@
 | `frontend/src/lib/recurrenceActions.ts` | 달력 CRUD, migrate, 남은 회차 수 |
 | `frontend/src/components/common/ConfirmDialog.tsx` | 범위 선택 UI (3버튼) |
 | `supabase/functions/ai-assistant/recurrence.ts` | AI 조회 회차 전개·제외 |
-| `supabase/functions/ai-assistant/recurrenceActions.ts` | AI 반복 수정·삭제 범위 처리 |
+| `supabase/functions/ai-assistant/recurrenceActions.ts` | 반복 범위 처리 (달력·레거시; AI mutation V2.3 차단) |
+| `supabase/functions/ai-assistant/recurringPolicy.ts` | AI 반복 mutation 차단 |
 | `supabase/migrations/005_add_event_recurrence.sql` | 초기 스키마 |
 | `supabase/migrations/007_simplify_event_recurrence_exceptions.sql` | 제외 테이블 단순화 |
 
@@ -97,7 +98,7 @@
 ## 8. 테스트
 
 [TESTING.md](./TESTING.md) — 반복 전개·남은 회차 수는 `recurrence.test.ts`로 일부 커버.  
-AI 조회 전개·반복 범위 CRUD는 Edge `recurrence.ts`·`recurrenceActions.ts`에 구현되어 있으며, 수동 QA([TESTING.md](./TESTING.md) §7)로 검증한다.
+AI **조회** 전개는 Edge `recurrence.ts`로 검증. AI 반복 **추가·수정·삭제**는 V2.3에서 차단([TESTING.md](./TESTING.md) §7 반복 mutation 차단).
 
 ---
 

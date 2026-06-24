@@ -335,6 +335,31 @@
   margin: 4px 0 12px 36px;
 }
 
+/* V3 pick-target (일정 목록 선택) */
+.ai-pick-target {
+  margin: 4px 0 12px 36px;
+  max-width: 100%;
+}
+
+.ai-pick-target ul {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+.ai-pick-target li {
+  margin-bottom: 6px;
+}
+
+.ai-pick-target li:last-child {
+  margin-bottom: 0;
+}
+
+.ai-pick-cancel {
+  width: 100%;
+  margin-top: 4px;
+}
+
 .ai-confirm-yes,
 .ai-confirm-no {
   padding: 8px 18px;

@@ -25,7 +25,7 @@
 | 2 | **`sessionContext.lastQuery`** 를 V1에 포함. 후속 턴(「그거 삭제」 등)에서 이벤트 id 참조. |
 | 3 | **delete**는 항상 confirmation 필요 (현행 유지). |
 | 4 | **confidence**는 TS에서만 계산. LLM self-report 금지. |
-| 5 | **다중 후보(N건)** 는 절대 자동 실행하지 않음. `propose_action` 또는 후속 V3 `pick-target`. |
+| 5 | **다중 후보(2~5건)** 는 **pick-target** 목록. **6건+**·**0건**은 채팅 되묻기. **절대** 잘못된 id로 자동 실행 금지. |
 | 6 | **V1**은 조회(Query) `resolveSchedule(mode: range)` 중심. |
 | 7 | create/update/delete의 `ScheduleSpec` 적용은 **V2**. |
 
@@ -45,14 +45,21 @@
 
 달력 주는 **일요일~토요일(KST)**. `week` + `weekday`는 해당 주의 그 요일 **하루**로 범위를 좁힌다.
 
-### 3-2. `TimeSpec` (V1 조회: `time_period` 필터로 유지)
+### 3-2. `TimeSpec` (V2 create/update)
 
-V1 조회는 도구 인자 `time_period`를 그대로 사용. V2에서 `ScheduleSpec.time`으로 통합.
+| kind | 필드 | 예 |
+|------|------|-----|
+| `all_day` | — | 종일 |
+| `clock` | `hour`, `minute?` | 15:30 → hour 15, minute 30 |
+| `time_period` | `period` | 저녁 → evening (기본 18:00 KST) |
+| `preserve` | — | update 시 `time` 생략 → **기존 회차/일정 시각 유지** (TS merge) |
+
+V1 조회는 도구 인자 `time_period` 필터를 그대로 사용. V2 mutation은 `schedule_spec.time`으로 통합.
 
 ### 3-3. `ScheduleSpec`
 
 ```ts
-{ date: DateSpec; time?: TimeSpec }  // V1 query: date만 사용
+{ date: DateSpec; time?: TimeSpec; duration_minutes?: number }
 ```
 
 ### 3-4. `ResolvedSchedule` (TS 출력)
@@ -71,21 +78,31 @@ V1 조회는 도구 인자 `time_period`를 그대로 사용. V2에서 `Schedule
 
 ## 4. 레이어
 
+### 조회 (V1)
+
 ```
 LLM → query_events(schedule_spec | legacy period, filters)
-    → legacyArgsToDateSpec / parseScheduleSpec
+    → enrichScheduleSpec (메시지 보강)
     → resolveSchedule(mode: 'range')
-    → executeEventQuery
-    → result { events, range, resolved }
-    → LLM 답변 (resolved만 인용)
+    → result { events, resolved }
+```
+
+### 추가·수정 (V2 / V2.2)
+
+```
+LLM → create_event | update_event
+    → sanitizeUpdateArgs (V2.2: metadata vs reschedule)
+    → [reschedule만] applyMutationScheduleSpec
+    → result { event, resolved }
 ```
 
 | 모듈 | 파일 |
 |------|------|
+| Mutation Safety | `mutationSafety.ts` |
 | 타입 | `scheduleSpec.ts` |
 | 해석 | `resolveSchedule.ts` |
-| 조회 실행 | `tools.ts` (`query_events`) |
-| 메시지 보강 | `index.ts` (`enrichScheduleSpec`) |
+| 조회·mutation 실행 | `tools.ts` |
+| 메시지·세션 보강 | `index.ts`, `sessionEnrich.ts` |
 | 세션 | `sessionContext` (요청 body) |
 
 ---
@@ -150,7 +167,8 @@ sessionContext?: {
 ```
 
 - 프론트: 마지막 조회 성공 시 `lastQuery`를 다음 메시지에 첨부.
-- 프롬프트: `sessionContext`의 id만 update/delete에 사용. 불명확하면 `propose_action`.
+- 프롬프트: `sessionContext`의 id·`start_at`으로 update/delete에 사용. 불명확하면 `propose_action`.
+- **반복 해당 회차:** `original_start_at` = 조회 결과의 그 회차 `start_at`. **마스터 `start_at`으로 fallback 하지 않는다** ([§9 V2.1](#v21-v1v2-잔여-이슈-수정)).
 
 ---
 
@@ -168,7 +186,7 @@ sessionContext?: {
 
 ## 9. V1 / V2 범위
 
-### V1 (구현 중)
+### V1 (완료)
 
 - [x] 설계 동결 (본 문서)
 - [x] `scheduleSpec.ts`, `resolveSchedule.ts`, 테스트
@@ -177,16 +195,92 @@ sessionContext?: {
 - [x] `sessionContext.lastQuery`
 - [x] 프롬프트 `schedule_spec` + resolved 인용
 
-### V2
+### V2 (완료)
 
-- `resolveSchedule(mode: instant)` → create/update
-- `TimeSpec` 통합
-- 레거시 `period` 제거
+- [x] `resolveInstantSchedule` → create/update `start_at`/`end_at`/`all_day`
+- [x] `TimeSpec` 통합 (`clock`, `time_period`, `all_day`)
+- [x] `create_event` / `update_event`에 `schedule_spec` (legacy `start_at`/`end_at` 브리지)
+- [x] mutation `result.resolved` (resolved_label, time_label, start_at 등)
+- [x] 프롬프트 create/update 규칙
+- [ ] 레거시 `period` 제거 (후순위)
 
-### V3
+### V2.1 (V1/V2 잔여 이슈 수정)
 
-- `identifyEvents` + 다중 후보 UI
-- `pick-target` confirmation
+- [x] **update 시간:** `schedule_spec`에 date만 있을 때 — 메시지「N시」보강 → 없으면 **기존 일정 시각 유지** (종일 강제 변환 방지)
+- [x] **mutation enrich (create):** create 시 메시지에서 date·time 추론
+- [x] **반복 해당 회차:** `sessionContext.lastQuery`로 `original_start_at` 보강, `masterStart` fallback **제거**
+- [x] `parseTimeSpec` 관대 파싱 (`{ hour: 15 }` 등)
+
+### V2.2 (Mutation Safety Layer)
+
+**파이프라인:** (3) CRUD → (2) 날짜 역할 → (1) 계산 → (5) 대상 → (4) changes → (6) gate
+
+| 구분 | 내용 | DB mutation |
+|------|------|-------------|
+| **target** | `id`, `original_start_at`, (향후 `keyword`, `filter`) | 사용 안 함 |
+| **changes** | `title`, `description`, `category` | 메타만 반영 |
+| **changes (reschedule)** | `schedule_spec` + time, `start_at`/`end_at` | instant resolve 후 반영 |
+
+**동결 불변식 (V2.2a — flat schema + partition):**
+
+1. `inferScheduleSpecFromMessage`는 **query_events 전용**. update에 주입 금지.
+2. update에서 **이동 의도(`hasRescheduleIntent`)** 없으면 `schedule_spec`/`start_at`/`end_at` **strip** (`sanitizeUpdateArgs`).
+3. 이동 의도: 메시지 동사(옮겨, 미뤄, …) 또는 `schedule_spec.time` (clock/time_period).
+4. 반복 **해당만** 수정: changes에 날짜 없으면 **회차 `original_start_at` 시각** 유지.
+5. (향후 V2.2b) nested `{ target, changes }` 스키마.
+
+**구현:** `mutationSafety.ts` — `partitionUpdateArgs`, `sanitizeUpdateArgs`, `hasRescheduleIntent`
+
+- [x] 문서 동결 (본 절)
+- [x] `mutationSafety.ts` + 테스트
+- [x] enrich / `buildUpdateFields` / `executeTool` / `updateRecurringByScope(this)` 연동
+- [ ] nested `{ target, changes }` 스키마 (후순위)
+
+### V2.3 (AI 반복 mutation 보류)
+
+반복 일정 **추가·수정·삭제**는 AI에서 버그·UX 불일치로 **대규모 리워크 전까지 차단**한다.
+
+| 구분 | 정책 |
+|------|------|
+| **조회** | 계속 지원 (`recurrence.ts` 회차 전개) |
+| **create** | `recurrence_freq` 있으면 차단 |
+| **update/delete** | 마스터 `recurrence_freq` 있으면 차단 |
+| **안내** | `RECURRING_MUTATION_BLOCKED_MESSAGE` — 달력에서 변경 요청 |
+| **레거시** | `recurrenceActions.ts`·confirm `scope` 경로는 코드 유지, AI UI에서는 진입 불가 |
+
+- [x] `recurringPolicy.ts` + `index.ts` / `tools.ts` / 프롬프트 연동
+- [ ] AI 반복 CRUD 대규모 리워크 (문장→scope, 달력 Confirm 복제)
+
+### V2.4 (Confirm 확정 — propose/맞다 파이프라인)
+
+**원칙:** 확인 문장 = 서버가 resolve한 payload 기준. 맞다 = **확정된 JSON** 그대로 실행.
+
+| 단계 | 동작 |
+|------|------|
+| **propose_action** | `enrichToolArgs` → `freezePendingMutationArgs` (start_at/end_at 확정, schedule_spec 제거) → `buildConfirmationMessage` |
+| **pending** | `_v24Frozen` + `triggerUserMessage` 저장 |
+| **confirm** | frozen이면 재-enrich 없이 실행; 아니면 `triggerUserMessage` + `sessionContext`로 enrich. `executeTool(..., { userMessage })` |
+
+- [x] `confirmProposal.ts`, `enrichToolArgs.ts` 분리
+- [x] propose 시 LLM `question` 무시, 서버 문장
+- [x] confirm 시 `triggerUserMessage` / `sessionContext` 전달
+- [ ] QA: 모호한 수정(날짜 이동) 맞다 → 문장·달력 일치
+
+### V3 (identifyEvents + pick-target)
+
+**UI 3종:** pick-target 목록 · 맞다/아니다 · 삭제 Confirm (+ 0/6+건 채팅 fallback)
+
+| 단계 | 동작 |
+|------|------|
+| **identify** | `extractSearchKeyword` + DB 조회 → tier: none / single / pick / too_many |
+| **gate** | update/delete/propose 전 `gateMutationTarget` |
+| **pick-target** | `mode=pick-target` → `continueAfterPickTarget` → delete Confirm / propose / execute |
+| **한계** | 비반복 일정만; 반복 mutation V2.3 차단 유지 |
+
+- [x] `identifyEvents.ts`, `mutationGate.ts` + 테스트
+- [x] Edge `pick-target` mode, index gate 연동
+- [x] 프론트 pick-target UI + `useAIChat.pickTarget`
+- [ ] QA: 2~5건 목록 · pick→맞다/아니다 · 0/6+ 채팅
 
 ---
 
@@ -197,8 +291,17 @@ sessionContext?: {
 | `supabase/functions/ai-assistant/scheduleSpec.ts` | 타입 |
 | `supabase/functions/ai-assistant/resolveSchedule.ts` | 해석 |
 | `supabase/functions/ai-assistant/resolveSchedule.test.ts` | 단위 테스트 |
-| `supabase/functions/ai-assistant/tools.ts` | query 연동·프롬프트 |
-| `supabase/functions/ai-assistant/index.ts` | enrich·sessionContext·pagination |
+| `supabase/functions/ai-assistant/mutationSafety.ts` | target/changes 분리·불변식 |
+| `supabase/functions/ai-assistant/mutationSafety.test.ts` | Mutation Safety 테스트 |
+| `supabase/functions/ai-assistant/recurringPolicy.ts` | AI 반복 mutation 차단 |
+| `supabase/functions/ai-assistant/recurringPolicy.test.ts` | 반복 차단 정책 테스트 |
+| `supabase/functions/ai-assistant/enrichToolArgs.ts` | 도구 인자 enrich |
+| `supabase/functions/ai-assistant/confirmProposal.ts` | propose 확정·확인 문장 |
+| `supabase/functions/ai-assistant/confirmProposal.test.ts` | 확인 문장 테스트 |
+| `supabase/functions/ai-assistant/identifyEvents.ts` | mutation 대상 식별 |
+| `supabase/functions/ai-assistant/identifyEvents.test.ts` | 키워드 추출 테스트 |
+| `supabase/functions/ai-assistant/mutationGate.ts` | identify gate |
+| `supabase/functions/ai-assistant/index.ts` | enrich·pick-target·confirm |
 | `frontend/src/hooks/useAIChat.ts` | sessionContext 전송 |
 
 ---

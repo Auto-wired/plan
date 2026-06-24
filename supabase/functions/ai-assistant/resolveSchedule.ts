@@ -12,9 +12,68 @@ import type {
   DateSpec,
   QueryWeekday,
   ResolveConfidence,
+  ResolvedInstant,
   ResolvedSchedule,
   ScheduleSpec,
+  TimeSpec,
 } from './scheduleSpec.ts'
+
+const DEFAULT_DURATION_MINUTES = 60
+
+/** time_period → default start hour (KST wall clock). */
+export const TIME_PERIOD_DEFAULT_START: Record<string, number> = {
+  dawn: 1,
+  morning: 6,
+  forenoon: 9,
+  daytime: 9,
+  afternoon: 12,
+  evening: 18,
+  night: 21,
+}
+
+const TIME_PERIOD_KO: Record<string, string> = {
+  dawn: '새벽',
+  morning: '아침',
+  forenoon: '오전',
+  daytime: '낮',
+  afternoon: '오후',
+  evening: '저녁',
+  night: '밤',
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+function formatWallClockIso(dateStr: string, hour: number, minute: number): string {
+  return `${dateStr}T${pad2(hour)}:${pad2(minute)}:00.000Z`
+}
+
+function addMinutesToWallClock(iso: string, minutes: number): string {
+  const match = iso.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/)
+  if (!match) throw new Error(`Invalid wall clock: ${iso}`)
+  const base = new Date(
+    Date.UTC(Number(match[1].slice(0, 4)), Number(match[1].slice(5, 7)) - 1, Number(match[1].slice(8, 10)),
+      Number(match[2]), Number(match[3])),
+  )
+  const end = new Date(base.getTime() + minutes * 60 * 1000)
+  return `${match[1]}T${pad2(end.getUTCHours())}:${pad2(end.getUTCMinutes())}:00.000Z`
+}
+
+export function parseTimeSpec(raw: unknown): TimeSpec | null {
+  if (!raw || typeof raw !== 'object') return null
+  const o = raw as Record<string, unknown>
+  const kind = o.kind
+  if (kind === 'all_day') return { kind: 'all_day' }
+  if (kind === 'preserve') return { kind: 'preserve' }
+  if (typeof o.hour === 'number' && (kind === 'clock' || kind === undefined)) {
+    return { kind: 'clock', hour: o.hour, minute: typeof o.minute === 'number' ? o.minute : 0 }
+  }
+  if (kind === 'time_period' && o.period) {
+    return { kind: 'time_period', period: String(o.period) }
+  }
+  return null
+}
 
 const WEEKDAY_KO: Record<QueryWeekday, string> = {
   sun: '일요일',
@@ -203,7 +262,10 @@ export function parseScheduleSpec(raw: unknown): ScheduleSpec | null {
   const o = raw as Record<string, unknown>
   const date = parseDateSpec(o.date ?? o)
   if (!date) return null
-  return { date }
+  const time = o.time ? parseTimeSpec(o.time) : undefined
+  const duration_minutes =
+    typeof o.duration_minutes === 'number' ? o.duration_minutes : undefined
+  return { date, time, duration_minutes }
 }
 
 export function legacyArgsToDateSpec(args: Record<string, unknown>): {
@@ -248,6 +310,343 @@ export function legacyArgsToDateSpec(args: Record<string, unknown>): {
   }
 
   return { spec: null, confidence: 'low' }
+}
+
+function timeSpecFromLegacyStartAt(startAt: string): TimeSpec {
+  const match = startAt.trim().match(/T(\d{2}):(\d{2})/)
+  if (!match) return { kind: 'all_day' }
+  if (match[1] === '00' && match[2] === '00') return { kind: 'all_day' }
+  return { kind: 'clock', hour: Number(match[1]), minute: Number(match[2]) }
+}
+
+export type EventTimeSnapshot = {
+  start_at: string
+  end_at: string
+  all_day: boolean
+}
+
+export function durationMinutesFromSnapshot(s: EventTimeSnapshot): number {
+  if (s.all_day) return DEFAULT_DURATION_MINUTES
+  const sm = s.start_at.match(/T(\d{2}):(\d{2})/)
+  const em = s.end_at.match(/T(\d{2}):(\d{2})/)
+  if (!sm || !em) return DEFAULT_DURATION_MINUTES
+  if (sm[1] === '00' && sm[2] === '00') return DEFAULT_DURATION_MINUTES
+  const startM = Number(sm[1]) * 60 + Number(sm[2])
+  const endM = Number(em[1]) * 60 + Number(em[2])
+  if (endM > startM) return endM - startM
+  return DEFAULT_DURATION_MINUTES
+}
+
+export function timeSpecFromSnapshot(s: EventTimeSnapshot): TimeSpec {
+  if (s.all_day) return { kind: 'all_day' }
+  return timeSpecFromLegacyStartAt(s.start_at)
+}
+
+/** 반복 confirm 경로: 마스터 + original_start_at → 회차 시각 스냅샷. */
+export function occurrenceTimeSnapshot(
+  master: EventTimeSnapshot,
+  originalStartAt?: string,
+): EventTimeSnapshot {
+  if (!originalStartAt) return master
+  const dateStr = originalStartAt.slice(0, 10)
+  if (master.all_day) {
+    return {
+      start_at: `${dateStr}T00:00:00.000Z`,
+      end_at: `${dateStr}T00:00:00.000Z`,
+      all_day: true,
+    }
+  }
+  const dur = durationMinutesFromSnapshot(master)
+  const occTime = timeSpecFromLegacyStartAt(originalStartAt)
+  if (occTime.kind === 'clock') {
+    const start_at = formatWallClockIso(dateStr, occTime.hour, occTime.minute ?? 0)
+    return {
+      start_at,
+      end_at: addMinutesToWallClock(start_at, dur),
+      all_day: false,
+    }
+  }
+  return {
+    start_at: originalStartAt,
+    end_at: addMinutesToWallClock(originalStartAt, dur),
+    all_day: false,
+  }
+}
+
+/** 사용자 메시지에서 시각·시간대 단어 추론 (mutation enrich). */
+export function inferTimeSpecFromMessage(message: string): TimeSpec | null {
+  const periodPatterns: Array<{ re: RegExp; period: string }> = [
+    { re: /새벽/, period: 'dawn' },
+    { re: /아침/, period: 'morning' },
+    { re: /(?:^|\s)오전(?!\s*\d)/, period: 'forenoon' },
+    { re: /(?:^|\s)낮/, period: 'daytime' },
+    { re: /(?:^|\s)오후(?!\s*\d)/, period: 'afternoon' },
+    { re: /저녁/, period: 'evening' },
+    { re: /(?:^|\s)밤/, period: 'night' },
+  ]
+  for (const { re, period } of periodPatterns) {
+    if (re.test(message)) return { kind: 'time_period', period }
+  }
+
+  const ampm = message.match(/(오전|오후)\s*(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분)?/)
+  if (ampm) {
+    let hour = Number(ampm[2])
+    const minute = ampm[3] ? Number(ampm[3]) : 0
+    if (ampm[1] === '오후' && hour < 12) hour += 12
+    if (ampm[1] === '오전' && hour === 12) hour = 0
+    return { kind: 'clock', hour, minute }
+  }
+
+  const plain = message.match(/(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분)?/)
+  if (plain) {
+    let hour = Number(plain[1])
+    const minute = plain[2] ? Number(plain[2]) : 0
+    // 일정 맥락: 1~6시 → 오후(+12), 7~11·12 → 그대로
+    if (hour >= 1 && hour <= 6) hour += 12
+    return { kind: 'clock', hour, minute }
+  }
+
+  return null
+}
+
+function enrichSpecWithTimeFallback(
+  spec: ScheduleSpec,
+  options: { existing?: EventTimeSnapshot; mode: 'create' | 'update' },
+  userMessage?: string,
+): ScheduleSpec {
+  if (spec.time) return spec
+
+  const fromMsg = userMessage ? inferTimeSpecFromMessage(userMessage) : null
+  if (fromMsg) {
+    return {
+      ...spec,
+      time: fromMsg,
+      duration_minutes: spec.duration_minutes ?? DEFAULT_DURATION_MINUTES,
+    }
+  }
+
+  if (options.mode === 'update' && options.existing) {
+    return {
+      ...spec,
+      time: timeSpecFromSnapshot(options.existing),
+      duration_minutes: durationMinutesFromSnapshot(options.existing),
+    }
+  }
+
+  return spec
+}
+
+/** create/update: schedule_spec에 time 누락 시 메시지에서 보강. */
+export function enrichMutationScheduleArgs(
+  args: Record<string, unknown>,
+  userMessage: string,
+): Record<string, unknown> {
+  if (!args.schedule_spec) return args
+  const parsed = parseScheduleSpec(args.schedule_spec)
+  if (!parsed || parsed.time) return args
+
+  const time = inferTimeSpecFromMessage(userMessage)
+  if (!time) return args
+
+  const raw = args.schedule_spec as Record<string, unknown>
+  return {
+    ...args,
+    schedule_spec: { ...raw, time },
+  }
+}
+
+/** create/update: schedule_spec or legacy start_at/end_at → ScheduleSpec. */
+export function legacyMutationToScheduleSpec(
+  args: Record<string, unknown>,
+): { spec: ScheduleSpec | null; confidence: ResolveConfidence } {
+  const parsed = args.schedule_spec ? parseScheduleSpec(args.schedule_spec) : null
+  if (parsed) {
+    return { spec: parsed, confidence: 'high' }
+  }
+
+  const startRaw = args.start_at ? String(args.start_at) : null
+  if (!startRaw) {
+    return { spec: null, confidence: 'low' }
+  }
+
+  const startDate = startRaw.slice(0, 10)
+  const endRaw = args.end_at ? String(args.end_at) : null
+  const endDate = endRaw ? endRaw.slice(0, 10) : startDate
+  const time = timeSpecFromLegacyStartAt(startRaw)
+
+  let duration_minutes: number | undefined
+  if (time?.kind === 'clock' && endRaw?.includes('T')) {
+    const em = endRaw.match(/T(\d{2}):(\d{2})/)
+    if (em && !(em[1] === '00' && em[2] === '00')) {
+      const startM = time.hour * 60 + (time.minute ?? 0)
+      const endM = Number(em[1]) * 60 + Number(em[2])
+      if (endM > startM) duration_minutes = endM - startM
+    }
+  }
+
+  return {
+    spec: {
+      date: {
+        kind: 'absolute',
+        start_date: startDate,
+        end_date: endDate !== startDate ? endDate : undefined,
+      },
+      time,
+      duration_minutes,
+    },
+    confidence: 'medium',
+  }
+}
+
+function resolveTimeOnDate(
+  dateStr: string,
+  time: TimeSpec | undefined,
+  durationMinutes: number,
+): { start_at: string; end_at: string; all_day: boolean; time_label?: string } {
+  if (!time || time.kind === 'all_day') {
+    return {
+      start_at: `${dateStr}T00:00:00.000Z`,
+      end_at: `${dateStr}T00:00:00.000Z`,
+      all_day: true,
+    }
+  }
+  if (time.kind === 'preserve') {
+    throw new Error('time.kind=preserve is only valid for updates with explicit start_at')
+  }
+
+  let hour: number
+  let minute = 0
+  let time_label: string | undefined
+
+  if (time.kind === 'clock') {
+    hour = time.hour
+    minute = time.minute ?? 0
+    time_label = `${pad2(hour)}:${pad2(minute)}`
+  } else {
+    hour = TIME_PERIOD_DEFAULT_START[time.period] ?? 9
+    time_label = TIME_PERIOD_KO[time.period] ?? time.period
+  }
+
+  const start_at = formatWallClockIso(dateStr, hour, minute)
+  const end_at = addMinutesToWallClock(start_at, durationMinutes)
+  return { start_at, end_at, all_day: false, time_label }
+}
+
+export function resolveInstantSchedule(
+  spec: ScheduleSpec,
+  referenceIso: string,
+  timezone: string,
+  confidence: ResolveConfidence,
+): ResolvedInstant {
+  if (spec.time?.kind === 'preserve') {
+    throw new Error('schedule_spec.time.preserve requires legacy start_at')
+  }
+
+  const { startDate, endDate } = resolveDateSpec(spec.date, referenceIso, timezone)
+  const duration = spec.duration_minutes ?? DEFAULT_DURATION_MINUTES
+  const rangeMeta = buildResolvedMetadata(spec.date, startDate, endDate, startDate, confidence)
+
+  const isMultiDay = endDate > startDate
+  const wantsAllDay = !spec.time || spec.time.kind === 'all_day' || isMultiDay
+
+  if (wantsAllDay) {
+    return {
+      start_at: `${startDate}T00:00:00.000Z`,
+      end_at: `${endDate}T00:00:00.000Z`,
+      all_day: true,
+      resolved_label: rangeMeta.resolved_label,
+      resolved_date: rangeMeta.resolved_date,
+      weekday_ko: rangeMeta.weekday_ko,
+      time_label: '종일',
+      confidence,
+    }
+  }
+
+  const { start_at, end_at, all_day, time_label } = resolveTimeOnDate(
+    startDate,
+    spec.time,
+    duration,
+  )
+
+  let resolved_label = rangeMeta.resolved_label
+  if (time_label) {
+    resolved_label = `${rangeMeta.resolved_label} ${time_label}`
+  }
+
+  return {
+    start_at,
+    end_at,
+    all_day,
+    resolved_label,
+    resolved_date: rangeMeta.resolved_date,
+    weekday_ko: rangeMeta.weekday_ko,
+    time_label,
+    confidence,
+  }
+}
+
+export function resolveMutationSchedule(
+  args: Record<string, unknown>,
+  referenceIso: string,
+  timezone: string,
+  options?: {
+    existingEvent?: EventTimeSnapshot
+    mode?: 'create' | 'update'
+    userMessage?: string
+  },
+): ResolvedInstant | null {
+  const mode = options?.mode ?? (args.id ? 'update' : 'create')
+  let { spec, confidence } = legacyMutationToScheduleSpec(args)
+  if (!spec) return null
+  if (spec.time?.kind === 'preserve') return null
+
+  spec = enrichSpecWithTimeFallback(
+    spec,
+    { existing: options?.existingEvent, mode },
+    options?.userMessage,
+  )
+
+  return resolveInstantSchedule(spec, referenceIso, timezone, confidence)
+}
+
+/** Merge schedule_spec into create/update args (start_at, end_at, all_day). */
+export function applyMutationScheduleSpec(
+  args: Record<string, unknown>,
+  referenceIso: string,
+  timezone: string,
+  options?: {
+    existingEvent?: EventTimeSnapshot
+    mode?: 'create' | 'update'
+    userMessage?: string
+  },
+): { args: Record<string, unknown>; resolved: ResolvedInstant | null } {
+  const resolved = resolveMutationSchedule(args, referenceIso, timezone, options)
+  if (!resolved) {
+    return { args, resolved: null }
+  }
+
+  return {
+    args: {
+      ...args,
+      start_at: resolved.start_at,
+      end_at: resolved.end_at,
+      all_day: resolved.all_day,
+    },
+    resolved,
+  }
+}
+
+export function resolvedInstantToPayload(resolved: ResolvedInstant) {
+  return {
+    resolved_label: resolved.resolved_label,
+    resolved_date: resolved.resolved_date,
+    weekday_ko: resolved.weekday_ko,
+    time_label: resolved.time_label,
+    start_at: resolved.start_at,
+    end_at: resolved.end_at,
+    all_day: resolved.all_day,
+    confidence: resolved.confidence,
+  }
 }
 
 export function resolveDateSpec(
